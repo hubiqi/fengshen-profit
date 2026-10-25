@@ -794,7 +794,7 @@ function finishSlot(slot){
       ok.title = S.files.map(f => `${f.name}\n  表头第${f.headerRow}行 · 识别${f.detected.length}列 · 新增${f.added}行 · 重复${f.dups||0}行`).join("\n");
     }
   }
-  saveSlotToDb(slot.id);
+  if(!S.demo) saveSlotToDb(slot.id);
   refreshStatus();
   scheduleRun();
 }
@@ -2102,10 +2102,146 @@ function run(){
   }
 }
 
+/* ================= 示例数据（一键体验） ================= */
+// 直接构造槽位数据（不经过 CSV 解析），几十毫秒即可完成
+function demoFill(slotId, objs, fileName){
+  const slot = SLOTS.find(s => s.id === slotId);
+  if(!slot) return;
+  const keys = slot.keys.map(([k]) => k);
+  const map = {}, headerNames = [];
+  keys.forEach((k, i) => { map[k] = i; headerNames[i] = KEY_LABEL[k] || k; });
+  const rows = objs.map(o => keys.map(k => (o[k] === undefined || o[k] === null) ? "" : String(o[k])));
+  const S = slotOf(slotId);
+  S.rows = rows;
+  S.map = map;
+  S.names = {};
+  keys.forEach((k, i) => { S.names[k] = headerNames[i]; });
+  S.seen = new Set();
+  S.demo = true;
+  S.files = [{ name:fileName, size:0, added:rows.length, dups:0, map, headerNames,
+               detected:Object.keys(map), headerRow:1, missing:[], blob:null, sheetName:"示例" }];
+  finishSlot(slot);
+}
+
+async function loadDemo(){
+  if((state.files.bill || state.files.rider) && !confirm("载入示例数据会先清空当前已上传的内容，继续？")) return;
+  const prog = $("#prog"), msg = $("#progM"), sub = $("#progS");
+  if(prog) prog.classList.add("on");
+  if(msg) msg.textContent = "正在生成示例数据…";
+  if(sub) sub.textContent = "三片三站 · 33 名骑手 · 一个完整账期";
+  try{
+    // 先清空
+    state.files = {}; state.model = null; state.periods = []; state.period = "";
+    try{ const all = await dbGetAll(); for(const [k] of all) await dbDel(k); }catch(e){}
+    SLOTS.forEach(s => {
+      const fl = $(`#fl-${s.id}`); if(fl) fl.innerHTML = "";
+      const ok = $(`#ok-${s.id}`); if(ok) ok.textContent = "";
+      const box = $(`#f-${s.id}`); if(box) box.classList.remove("has","err");
+    });
+
+    const G = [
+      { label:"福州仓山区万达商圈片", station:"福州仓山区万达站" },
+      { label:"福州晋安区王庄商圈片", station:"福州晋安区王庄站" },
+      { label:"福州鼓楼区五四商圈片", station:"福州鼓楼区五四站" }
+    ];
+    const names = ["陈建国","林志强","黄伟","张小明","刘德海","吴超","郑立","周文军","徐海涛","孙朋",
+                   "马晓东","朱鹏","胡军","高翔","林芳","何静","罗辉","邓亮","曹阳","谢涛",
+                   "韩雪","唐磊","冯坤","曾勇","彭涛","蒋伟","袁烨","于洋","董强","潘军",
+                   "苏航","蔡明","余乐","程亮","邵峰","毛磊","万强","侯杰","段勇","严明",
+                   "龚涛","柳青","费翔","邬迪","洪亮"];
+    let seed = 20260801;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const riders = names.map((nm, i) => {
+      const g = G[i % G.length];
+      return { id:String(9001 + i), name:nm, g,
+               orders: 1000 + Math.floor(rnd() * 250),
+               base: +(7.2 + rnd() * 0.4).toFixed(2) };
+    });
+
+    /* --- 风神账单-服务商：逐单流水 + 汇总类流水 --- */
+    const bills = [];
+    let oid = 880000;
+    for(const r of riders){
+      const days = 26, perDay = Math.max(2, Math.round(r.orders / days));
+      for(let d = 1; d <= days; d++){
+        const day = `2026-08-${String(d).padStart(2,"0")}`;
+        for(let k = 0; k < perDay; k++){
+          const stren = +(rnd() * 0.8).toFixed(2);
+          const tm = `${day} ${String(8 + Math.floor(rnd()*11)).padStart(2,"0")}:${String(Math.floor(rnd()*60)).padStart(2,"0")}:00`;
+          oid++;
+          bills.push({ date:day, type:"配送费", sub:"配送收入",
+                       amt:(r.base + stren).toFixed(2), base:r.base.toFixed(2), stren:stren.toFixed(2),
+                       rid:r.id, rname:r.name, team:r.g.station, cat:r.g.label,
+                       oid:"'"+oid, waybill:String(700000 + oid), time:tm, detail:"基础配送费" });
+        }
+      }
+    }
+    for(const g of G){
+      const list = riders.filter(r => r.g.label === g.label);
+      const orders = list.reduce((a,r) => a + r.orders, 0);
+      const salary = list.reduce((a,r) => a + r.orders * r.base * 0.75, 0);
+      const day = "2026-08-31";
+      const put = (type, sub, amt, detail) => bills.push({
+        date:day, type, sub, amt:amt.toFixed(2), base:"0", stren:"0",
+        team:g.station, cat:g.label, time:day + " 23:00:00", detail });
+      put("日结配送费扣款","保险",-orders * 0.28,"保险");
+      put("违规扣款","超时索赔",-orders * 0.16,"超时索赔");
+      put("违规扣款","抽检扣款",-orders * 0.05,"服务抽检");
+      put("服务费","隐私服务费",-orders * 0.08,"隐私服务费");
+      put("服务费","信息费",-orders * 0.04,"信息服务费");
+      put("服务费","人力资源招聘服务费",-orders * 0.08,"人力资源招聘服务费");
+      put("代收代付","个税代扣",-salary * 0.02,"个税代扣");
+      put("代收代付","智能柜费",-orders * 0.03,"智能柜");
+      put("考核奖惩","KPI 奖励",orders * 0.10,"月度考核奖励");
+      put("调整账","差异调整",orders * 0.03,"差异调整");
+      put("配送费","配送费支付调整",-salary * 0.98,"代发骑手工资");
+    }
+
+    /* --- 骑手账单 --- */
+    const rRows = riders.map(r => {
+      const salary = +(r.orders * r.base * 0.75).toFixed(2);
+      return { rid:r.id, rname:r.name, period:"2026-08", group:r.g.label, station:r.g.station,
+               orders:r.orders, salary:salary.toFixed(2), adv:"0", tax:(salary * 0.02).toFixed(2) };
+    });
+
+    /* --- 管理工资 --- */
+    const wages = [];
+    for(const g of G) wages.push({ group:g.station, month:"2026-08", amt:"5200", name:g.station.slice(-3) + "站长", pos:"站长" });
+    wages.push({ group:G[0].label, month:"2026-08", amt:"7600", name:"片区经理", pos:"片区经理" });
+    wages.push({ group:"公司", month:"2026-08", amt:"6000", name:"总经理室", pos:"总经理" });
+
+    /* --- 报销台账 --- */
+    const reimbs = [];
+    for(const g of G){
+      reimbs.push({ group:g.station, month:"2026-08", amt:"2200", name:"站点房租" });
+      reimbs.push({ group:g.station, month:"2026-08", amt:"460",  name:"水电费" });
+      reimbs.push({ group:g.label,   month:"2026-08", amt:"600",  name:"办公杂费" });
+    }
+    reimbs.push({ group:"公司", month:"2026-08", amt:"1800", name:"总部办公用品" });
+
+    if(msg) msg.textContent = "载入风神账单…";
+    demoFill("bill",  bills, "示例-风神账单.csv");
+    if(msg) msg.textContent = "载入骑手账单…";
+    demoFill("rider", rRows, "示例-骑手账单.csv");
+    demoFill("wage",  wages, "示例-管理工资.csv");
+    demoFill("reimb", reimbs, "示例-报销台账.csv");
+
+    fillPeriods();
+    run();
+    flash("示例数据已载入 · 点「清空数据」可删除");
+  }catch(err){
+    console.error(err);
+    flash("示例数据载入失败：" + (err && err.message));
+  }finally{
+    if(prog) prog.classList.remove("on");
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   renderSlots();
 
   $("#runBtn").onclick = () => { if(!state.periods.length) fillPeriods(); run(); };
+  $("#demoBtn").onclick = loadDemo;
   $("#clearBtn").onclick = async () => {
     if(!confirm("清空已上传的所有文件？本机保存的数据也会一起删掉。")) return;
     state.files = {}; state.model = null; state.periods = []; state.period = "";
