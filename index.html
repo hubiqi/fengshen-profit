@@ -308,7 +308,7 @@
     <button class="close" id="maskClose">×</button>
     <h3>核算口径</h3>
     <p><b>1. 毛收入（还原法）</b>：取《风神账单》中 <code>业务类型=配送收入</code> 的<b>基础配送费 + 强度补贴</b>，加上 KPI、调整账、配送保障补贴、申诉返款。<b>不使用「配送费支付调整」</b>——那笔钱等于平台代发的骑手工资，已在支出侧按薪资全额记一次，再记会重复。</p>
-    <p><b>2. 骑手成本</b>：<code>Σmax(0, 薪资合计) + 自定义发薪(预支) + 骑手代付个税</code>。预支是我们垫付的现金，薪资合计是平台代发的部分，两者相加才是骑手全月所得；个税按 <code>Σ max(0, (骑手月薪×80% − 5000) × 3%)</code> 逐人计算（不足 5000 不计，负数不冲抵）。</p>
+    <p><b>2. 骑手成本</b>：<code>Σmax(0, 薪资合计) + 自定义发薪(预支) + 骑手代付个税</code>。预支是我们垫付的现金（源表无论写正数还是负数，一律按<b>绝对值</b>计入成本），薪资合计是平台代发的部分，两者相加才是骑手全月所得；个税按 <code>Σ max(0, (骑手月薪×80% − 5000) × 3%)</code> 逐人计算（不足 5000 不计，负数不冲抵）。</p>
     <p><b>3. 平台费</b>：日结配送费扣款（保险）、违规扣款（索赔/抽检/轩辕）、服务费（隐私/信息/安全画像，<b>剔除人力资源招聘服务费</b>）、代收代付（智能柜/个税/暖心餐）。</p>
     <p><b>4. 招聘</b>：取《风神账单》中 <code>服务费 / 人力资源招聘服务费</code>，单列不并入服务费。</p>
     <p><b>5. 税赋</b>：<code>5.3% × (预支 + 薪资) + 6.72% × MAX(0, 毛收入 − 骑手成本 − 平台费)</code>。前者是灵工服务费，后者是差额征税。</p>
@@ -1336,7 +1336,7 @@ function compute(period){
     const id = normId(r[rm.rid]);
     const o = num(r[rm.orders]);
     const sal = num(r[rm.salary]);
-    const adv = -num(r[rm.adv]);
+    const adv = Math.abs(num(r[rm.adv]));   // 预支=我方垫付的成本，源表写正写负都按绝对值计
     const a = mk(g);
     a.orders += o; a.cost.salary += sal; a.cost.adv += adv;
     if(id){
@@ -1718,7 +1718,7 @@ function lineData(m){
   ].filter(x=>Math.abs(x[2])>0.005);
   const exp=[
     ["骑手成本","骑手薪资（平台代发）",-s.salary,"骑手账单·薪资合计（负值按 0 计，扣不回来）",""],
-    ["骑手成本","骑手预支（我方垫付）",-s.adv,"骑手账单·自定义发薪(预支)（账单为负）",""],
+    ["骑手成本","骑手预支（我方垫付）",-s.adv,"骑手账单·自定义发薪(预支)（按绝对值计入，源表正负都行）",""],
     ["骑手成本","骑手代付（个税）",-s.pay,"Σ max(0, (月薪×80% − 5000) × 3%)，我们承担",""],
     ["平台费","保险",s.ins,"日结配送费扣款·按险种拆分","ins"],
     ["平台费","违规扣款",s.viol,"索赔 / 抽检 / 轩辕罚单","viol"],
@@ -2214,16 +2214,17 @@ async function loadDemo(){
     }
 
     /* --- 骑手账单 --- */
-    const rRows = riders.map(r => {
-      const salary = +(r.orders * r.base * 0.75).toFixed(2);
+    const rRows = riders.map((r, i) => {
+      const total = +(r.orders * r.base * 0.75).toFixed(2);
+      const adv = i % 6 === 0 ? 300 : 0;          // 每 6 个骑手有 300 元预支（源表写正数）
       return { rid:r.id, rname:r.name, period:"2026-08", group:r.g.label, station:r.g.station,
-               orders:r.orders, salary:salary.toFixed(2), adv:"0", tax:(salary * 0.02).toFixed(2) };
+               orders:r.orders, salary:(total - adv).toFixed(2), adv:String(adv), tax:(total * 0.02).toFixed(2) };
     });
 
     /* --- 管理工资 --- */
     const wages = [];
     for(const g of G) wages.push({ group:g.station, month:"2026-08", amt:"5200", name:g.station.slice(-3) + "站长", pos:"站长" });
-    wages.push({ group:G[0].label, month:"2026-08", amt:"7600", name:"片区经理", pos:"片区经理" });
+    wages.push({ group:"公司", month:"2026-08", amt:"7600", name:"片区经理", pos:"片区经理" });
     wages.push({ group:"公司", month:"2026-08", amt:"6000", name:"总经理室", pos:"总经理" });
 
     /* --- 报销台账 --- */
