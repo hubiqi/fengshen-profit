@@ -1337,9 +1337,30 @@ function compute(period){
     return riders[key] || (riders[key] = { id, key, name:name||"", team:t, teamN:tn,
       station:st, stationN: st ? N(st) : "",
       gkey:g||"-", group:label||"-",
-      orders:0, rev:0, base:0, stren:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
+      orders:0, rev:0, base:0, stren:0, ownBase:0, ownStren:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
   };
   // 账单行按「骑手ID + 团队」找人；团队名对不上时退到同片唯一那人，再退到单量最多的那行
+  // 风神账单的一行可能对应骑手的多行（跨团队且团队名对不上）：返回 [行, 权重]
+  const riderRowsFor = (id, g, label, name, team, station) => {
+    const t = String(team == null ? "" : team).trim();
+    const tn = t ? N(t) : "";
+    const st = String(station == null ? "" : station).trim();
+    const sn = st ? N(st) : "";
+    const key = id + "|" + (tn || sn || g || "-");
+    if(riders[key]) return [[riders[key], 1]];
+    const same = Object.values(riders).filter(x => x.id === id);
+    if(same.length === 1) return [[same[0], 1]];
+    if(same.length){
+      if(tn){ const m = same.find(x => x.teamN === tn || x.stationN === tn); if(m) return [[m, 1]]; }
+      if(sn){ const m = same.find(x => x.stationN === sn || x.teamN === sn); if(m) return [[m, 1]]; }
+      const byG = same.filter(x => x.gkey === g);
+      const pool = byG.length ? byG : same;
+      const tot = pool.reduce((sum,x)=>sum + x.orders, 0);
+      if(tot > 0) return pool.map(x => [x, x.orders/tot]);
+      return pool.map(x => [x, 1/pool.length]);
+    }
+    return [[mkR(id, g, label, name, t, st), 1]];
+  };
   const riderByBill = (id, g, label, name, team, station) => {
     const t = String(team == null ? "" : team).trim();
     const tn = t ? N(t) : "";
@@ -1455,8 +1476,12 @@ function compute(period){
       a.rev.base += base; a.rev.stren += stren;
       add3(a,"base",dt,base); add3(a,"stren","强度补贴",stren);
       if(rid){
-        const x = riderByBill(rid, g, gg.label, rname, bm.team !== undefined ? r[bm.team] : "", "");
-        x.rev += base + stren; x.base += base; x.stren += stren;
+        const billTeam = bm.team !== undefined ? r[bm.team] : "";
+        for(const [x, w] of riderRowsFor(rid, g, gg.label, rname, billTeam, "")){
+          x.rev += (base + stren) * w;
+          x.base += base * w; x.stren += stren * w;
+          x.ownBase += base * w; x.ownStren += stren * w;
+        }
       }
       continue;
     }
@@ -1468,8 +1493,8 @@ function compute(period){
       a.cost[key] += amt;
       add3(a, key, l3name !== undefined ? l3name : sub, amt);
       if(byRiderToo && rid){
-        const x = riderByBill(rid, g, gg.label, rname, bm.team !== undefined ? r[bm.team] : "", "");
-        x[key] += amt;
+        const billTeam = bm.team !== undefined ? r[bm.team] : "";
+        for(const [x, w] of riderRowsFor(rid, g, gg.label, rname, billTeam, "")) x[key] += amt * w;
       }
       if(g==="-") other[key] += amt;
     };
@@ -2104,6 +2129,14 @@ function renderRiders(m){
         const v = state.perUnit ? (x.orders ? raw/x.orders : 0) : raw;
         let txt = `${v<0?"−":(signed&&v>0?"+":"")}${state.perUnit ? "¥"+Math.abs(v).toFixed(2) : money(Math.abs(v))}`;
         let tip = "";
+        if(key === "base" || key === "stren"){
+          const own = key === "base" ? (x.ownBase||0) : (x.ownStren||0);
+          const share = raw - own;
+          const parts = [`本人逐单流水：${money(Math.abs(own))}`];
+          if(Math.abs(share) > 0.5) parts.push(`片内分摊（无骑手ID的配送收入）：${share<0?"−":"+"}${money(Math.abs(share))}`);
+          if(!x.orders) parts.push(`本人本期单量为 0`);
+          tip = ` title="${parts.join(" ｜ ")}"`;
+        }
         if(key === "salary"){
           if(x.salaryRaw < 0)
             txt = `${money(0)} <s style="color:var(--muted);font-weight:400">${"−" + money(Math.abs(x.salaryRaw))}</s>`;
@@ -2144,6 +2177,14 @@ function renderNotes(m){
   if(m.riders && m.riders.some(x => x.dim && x.group !== "-")) warn.push(`<li>骑手表与「商圈片」表<b>列完全一致</b>：收入 / 骑手成本 / 平台费 / 招聘 / 税赋 / 管理成本 → <b>净利 = 各列相加</b>。片里没落到具体骑手的收支按<b>单量占比</b>摊到人，逐列加总 = 片级数字，<b>骑手净利合计 = 整商净利</b>。</li>`);
   if(m.skipRider && m.skipRider.rows){
     warn.push(`<li class="warn">骑手账单里有 <b>${m.skipRider.rows}</b> 行<b>没有骑手ID</b>（${m.skipRider.list.map(esc).join("、")}${m.skipRider.rows>m.skipRider.list.length?"…":""}），薪资合计 <b>${money(Math.abs(m.skipRider.salary))}</b>、单量 ${Math.round(m.skipRider.orders).toLocaleString()}，已<b>整行跳过</b>——这类行通常是「合计/小计」行，或 ID 写法与主表不一致，计入会重复算一遍成本。</li>`);
+  }
+  const revNoOrders = (m.riders||[]).filter(x => x.orders === 0 && Math.abs(x.rev||0) > 0.5);
+  if(revNoOrders.length){
+    warn.push(`<li class="warn"><b>${revNoOrders.length}</b> 名骑手有配送收入但单量为 0（${revNoOrders.slice(0,3).map(x=>esc(x.name||x.id)).join("、")}${revNoOrders.length>3?"…":""}）——风神账单里有他的逐单流水，但骑手账单里没有这个人（离职/未发薪/ID 不同）。这类行没有薪资成本，净利会偏高。</li>`);
+  }
+  const noRevRows = (m.riders||[]).filter(x => x.orders > 0 && Math.abs(x.rev||0) < 0.5);
+  if(noRevRows.length){
+    warn.push(`<li class="warn"><b>${noRevRows.length}</b> 名骑手有单量却归集不到逐单配送费（${noRevRows.slice(0,3).map(x=>esc(x.name||x.id)).join("、")}${noRevRows.length>3?"…":""}）——多半是风神账单的「团队名称」与骑手账单的团队/站点对不上，收入只能按单量摊过来。鼠标停在该行「基础配送费」格上可看「本人 / 分摊」拆分。</li>`);
   }
   const allocSal = (m.riders||[]).filter(x => Math.abs(x.salaryAlloc||0) > 0.5);
   if(allocSal.length){
