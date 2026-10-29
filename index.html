@@ -589,6 +589,7 @@ const SLOTS = [
           ["base",["基础配送费","基础配送费(元)","基础配送"]],
           ["stren",["强度补贴","难度奖励","强度奖励","难度补贴","强度奖","难度补贴金额","强度补贴(元)"]],
           ["rid",["骑手id","骑手编号"]],["rname",["骑手姓名","骑手名称","姓名"]],
+          ["teamid",["团队id","团队编号","团队编码","站点id","站点编号"]],
           ["team",["团队名称","站点名称","所属站点","所属团队"]],
           ["cat",["匹配类目","商圈片","所属商圈"]],["mname",["加盟商名称"]],
           ["oid",["订单号"]],["waybill",["运单号"]],["time",["业务交易时间","交易时间"]],
@@ -608,7 +609,7 @@ const SLOTS = [
           ["tax",["个税扣款"]],["water",["水电费"]],
           ["equip",["装备物资"]],["dorm",["住宿费用"]],["car",["车辆租金"]],
           ["station",["骑手所属站点名称","所属站点名称","站点名称","骑手所属站点","所属站点"]],
-          ["team",["团队id","团队编号","团队编码","团队","团队名称","站点id","站点编号"]]],
+          ["team",["骑手所属站点id","所属站点id","站点id","站点编码","团队id","团队编号","团队编码","团队","团队名称","站点编号"]]],
     sheet:["骑手账单","骑手薪资文件","薪资文件"] },
 
   { id:"wage", name:"管理工资", req:false, minScore:2,
@@ -1495,7 +1496,8 @@ function compute(period){
       const bt = billTypes[tk] || (billTypes[tk] = { rows:0, amt:0, base:0, stren:0 });
       bt.rows++; bt.amt += amt; bt.base += base; bt.stren += stren;
       if(rid){
-        const billTeam = bm.team !== undefined ? r[bm.team] : "";
+        const billTeam = bm.teamid !== undefined ? r[bm.teamid]
+                       : (bm.team !== undefined ? r[bm.team] : "");
         if(String(billTeam||"").trim()) teamSeen.add(String(billTeam).trim());
         for(const [x, w] of riderRowsFor(rid, g, gg.label, rname, billTeam, "")){
           x.rev += (base + stren) * w;
@@ -1514,7 +1516,8 @@ function compute(period){
       a.cost[key] += amt;
       add3(a, key, l3name !== undefined ? l3name : sub, amt);
       if(byRiderToo && rid){
-        const billTeam = bm.team !== undefined ? r[bm.team] : "";
+        const billTeam = bm.teamid !== undefined ? r[bm.teamid]
+                       : (bm.team !== undefined ? r[bm.team] : "");
         for(const [x, w] of riderRowsFor(rid, g, gg.label, rname, billTeam, "")) x[key] += amt * w;
       }
       if(g==="-") other[key] += amt;
@@ -1707,7 +1710,7 @@ function compute(period){
              rate: revAll? net/revAll*100 : 0,
              costRate: x.rev? (x.salary+x.adv+pay)/x.rev*100 : 0,
              other: x.ins + x.viol };
-  }).filter(x => x.orders>0 || x.rev!==0 || x.salary!==0 || x.adv!==0 || x.ins!==0 || x.viol!==0);
+  }).filter(x => x.orders>0 || x.rev!==0 || x.salary!==0 || x.adv!==0 || x.ins!==0 || x.viol!==0 || (x.salaryRaw||0)!==0);
 
   // 未匹配站点（骑手账单没有商圈片列时才有意义）
   let unmapped = [];
