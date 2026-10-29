@@ -1823,9 +1823,9 @@ function exportLinesCsv(){
 
 const GROUP_CAT = {
   "收入": { "基础配送费":"base", "强度补贴":"stren", "KPI 考核":"kpi", "调整账":"adj", "配送保障补贴":"guar", "申诉返款":"appeal" },
-  "平台费": { "保险":"ins", "违规":"viol", "服务费":"fee", "代收代付":"collect" },
+  "平台费": { "保险":"ins", "违规扣款":"viol", "服务费":"fee", "代收代付":"collect" },
   "招聘": { "招聘服务费":"recruit" },
-  "管理成本": { "站点管理":"wage", "站点支出":"reimb", "城市分摊":"alloc" }
+  "管理成本": { "站点管理工资":"wage", "站点支出":"reimb", "城市分摊":"alloc" }
 };
 function groupDetail(a){
   const d = a.inc || {}, c = a.cost;
@@ -1833,11 +1833,11 @@ function groupDetail(a){
   const E = (n,v)=>({ n, v: v||0 });   // 传入的已是「对利润的贡献」符号，不再强制负号
   return [
     { l1:"收入", cols:[R("基础配送费",d.base),R("强度补贴",d.stren),R("KPI 考核",d.kpi),R("调整账",d.adj),R("配送保障补贴",d.guar),R("申诉返款",d.appeal)] },
-    { l1:"骑手成本", cols:[E("薪资",-c.salary),E("预支",-c.adv),E("代付(个税)",-c.pay)] },
-    { l1:"平台费", cols:[E("保险",c.ins),E("违规",c.viol),E("服务费",c.fee),E("代收代付",c.collect)] },
+    { l1:"骑手成本", cols:[E("骑手薪资（平台代发）",-c.salary),E("骑手预支（我方垫付）",-c.adv),E("骑手代付（个税）",-c.pay)] },
+    { l1:"平台费", cols:[E("保险",c.ins),E("违规扣款",c.viol),E("服务费",c.fee),E("代收代付",c.collect)] },
     { l1:"招聘", cols:[E("招聘服务费",c.recruit)] },
     { l1:"税赋", cols:[E("税赋",a.tax)] },
-    { l1:"管理成本", cols:[E("站点管理",-a.wage),E("站点支出",-a.reimb),E("城市分摊",-a.alloc)] },
+    { l1:"管理成本", cols:[E("站点管理工资",-a.wage),E("站点支出",-a.reimb),E("城市分摊",-a.alloc)] },
     { l1:"净利", cols:[{ n:"净利", v:a.profit },{ n:"净利率", pct:true }] }
   ];
 }
@@ -1992,11 +1992,11 @@ function exportGroupsCsv(){
 
 const DIM_CATS = [
   { l1:"收入", cols:[["基础配送费","base"],["强度补贴","stren"],["KPI 考核","kpi"],["调整账","adj"],["配送保障补贴","guar"],["申诉返款","appeal"]] },
-  { l1:"骑手成本", cols:[["薪资","salary"],["预支","adv"],["代付(个税)","pay"]] },
-  { l1:"平台费", cols:[["保险","ins"],["违规","viol"],["服务费","fee"],["代收代付","collect"]] },
+  { l1:"骑手成本", cols:[["骑手薪资（平台代发）","salary"],["骑手预支（我方垫付）","adv"],["骑手代付（个税）","pay"]] },
+  { l1:"平台费", cols:[["保险","ins"],["违规扣款","viol"],["服务费","fee"],["代收代付","collect"]] },
   { l1:"招聘", cols:[["招聘服务费","recruit"]] },
   { l1:"税赋", cols:[["税赋","tax"]] },
-  { l1:"管理成本", cols:[["站点管理","wage"],["站点支出","reimb"],["城市分摊","alloc"]] }
+  { l1:"管理成本", cols:[["站点管理工资","wage"],["站点支出","reimb"],["城市分摊","alloc"]] }
 ];
 const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length, 0) + 2;   // + 净利 + 净利率
 let _riderHeadBuilt = false;
