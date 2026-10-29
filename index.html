@@ -602,7 +602,8 @@ const SLOTS = [
           ["prepay",["自定义发薪(提前发薪)","提前发薪"]],
           ["tax",["个税扣款"]],["water",["水电费"]],
           ["equip",["装备物资"]],["dorm",["住宿费用"]],["car",["车辆租金"]],
-          ["station",["骑手所属站点名称","所属站点名称","站点名称","骑手所属站点","所属站点"]]],
+          ["station",["骑手所属站点名称","所属站点名称","站点名称","骑手所属站点","所属站点"]],
+          ["team",["团队id","团队编号","团队编码","团队","团队名称","站点id","站点编号"]]],
     sheet:["骑手账单","骑手薪资文件","薪资文件"] },
 
   { id:"wage", name:"管理工资", req:false, minScore:2,
@@ -1323,11 +1324,34 @@ function compute(period){
   const riders = {};   // riderId -> agg
   const riderG = {};   // riderId -> 商圈片（账单里没写站点的行，用骑手所属片回填）
   const riderGrpOrders = {};  // riderId -> { 片key: 单量 }（跨站骑手的个税按单量拆）
-  // 一人一片一行：同一骑手跨片跑单时拆成两行，避免他的薪资/预支被算到另一个片再摊给别人
-  const mkR = (id,g,label,name) => {
-    const key = id + "|" + (g || "-");
-    return riders[key] || (riders[key] = { id, key, name:name||"", gkey:g||"-", group:label||"-",
+  // 一人一团队一行：骑手ID + 团队ID 才是唯一键（同一人在两个团队/站点跑单就拆两行）
+  const mkR = (id,g,label,name,team,station) => {
+    const t = String(team == null ? "" : team).trim();
+    const tn = t ? N(t) : "";
+    const st = String(station == null ? "" : station).trim();
+    const key = id + "|" + (tn || N(st) || g || "-");
+    return riders[key] || (riders[key] = { id, key, name:name||"", team:t, teamN:tn,
+      station:st, stationN: st ? N(st) : "",
+      gkey:g||"-", group:label||"-",
       orders:0, rev:0, base:0, stren:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
+  };
+  // 账单行按「骑手ID + 团队」找人；团队名对不上时退到同片唯一那人，再退到单量最多的那行
+  const riderByBill = (id, g, label, name, team, station) => {
+    const t = String(team == null ? "" : team).trim();
+    const tn = t ? N(t) : "";
+    const st = String(station == null ? "" : station).trim();
+    const sn = st ? N(st) : "";
+    const key = id + "|" + (tn || sn || g || "-");
+    if(riders[key]) return riders[key];
+    const same = Object.values(riders).filter(x => x.id === id);
+    if(same.length){
+      if(tn){ const m = same.find(x => x.teamN === tn || x.stationN === tn); if(m) return m; }
+      if(sn){ const m = same.find(x => x.stationN === sn || x.teamN === sn); if(m) return m; }
+      const byG = same.filter(x => x.gkey === g);
+      if(byG.length === 1) return byG[0];
+      return same.slice().sort((a,b)=>b.orders-a.orders)[0];
+    }
+    return mkR(id, g, label, name, t, st);
   };
   let unassignedRows = 0, unassignedAmt = 0, billOrders = 0;
   const unassignedList = [];
@@ -1358,7 +1382,10 @@ function compute(period){
     const a = mk(g);
     a.orders += o; a.cost.salary += sal; a.cost.adv += adv;
     if(id){
-      const x = mkR(id, g, gg.label, r[rm.rname]);
+      // 骑手账单的行自己建行：同一人不同团队必须分开，不能退回别人的行
+      const x = mkR(id, g, gg.label, r[rm.rname],
+                    rm.team !== undefined ? r[rm.team] : "",
+                    rm.station !== undefined ? r[rm.station] : "");
       x.orders += o; x.salary += sal; x.adv += adv;
       (x.gsal || (x.gsal = {}))[g] = ((x.gsal[g]) || 0) + sal;
       (x.gadv || (x.gadv = {}))[g] = ((x.gadv[g]) || 0) + adv;
@@ -1423,7 +1450,10 @@ function compute(period){
       const dt = bm.detail!==undefined ? String(r[bm.detail]??"").trim() : "";
       a.rev.base += base; a.rev.stren += stren;
       add3(a,"base",dt,base); add3(a,"stren","强度补贴",stren);
-      if(rid){ const x = mkR(rid,g,gg.label,rname); x.rev += base + stren; x.base += base; x.stren += stren; }
+      if(rid){
+        const x = riderByBill(rid, g, gg.label, rname, bm.team !== undefined ? r[bm.team] : "", "");
+        x.rev += base + stren; x.base += base; x.stren += stren;
+      }
       continue;
     }
     if(type==="配送费" && sub==="配送费支付调整") continue;  // 已通过薪资还原
@@ -1433,7 +1463,10 @@ function compute(period){
       const a = mk(g);
       a.cost[key] += amt;
       add3(a, key, l3name !== undefined ? l3name : sub, amt);
-      if(byRiderToo && rid){ const x = mkR(rid,g,gg.label,rname); x[key] += amt; }
+      if(byRiderToo && rid){
+        const x = riderByBill(rid, g, gg.label, rname, bm.team !== undefined ? r[bm.team] : "", "");
+        x[key] += amt;
+      }
       if(g==="-") other[key] += amt;
     };
 
@@ -2028,7 +2061,7 @@ function buildRiderHead(){
   _riderHeadBuilt = true;
   const el = $("#riderHead"); if(!el) return;
   el.innerHTML =
-    `<tr><th rowspan="2" class="s" data-k="name">骑手</th><th rowspan="2">商圈片</th>` +
+    `<tr><th rowspan="2" class="s" data-k="name">骑手</th><th rowspan="2">团队</th><th rowspan="2">商圈片</th>` +
     `<th rowspan="2" class="r s" data-k="orders" style="border-right:2px solid var(--line)">单量</th>` +
     DIM_CATS.map(g=>`<th colspan="${g.cols.length}" class="g1" style="text-align:center">${g.l1}</th>`).join("") +
     `<th colspan="2" class="g1" style="text-align:center">结果</th></tr><tr>` +
@@ -2039,7 +2072,7 @@ function renderRiders(m){
   buildRiderHead();
   let list = m.riders.slice();
   const q = state.riderQ.trim().toLowerCase();
-  if(q) list = list.filter(x => (x.name||"").toLowerCase().includes(q) || String(x.id).includes(q) || (x.group||"").toLowerCase().includes(q));
+  if(q) list = list.filter(x => (x.name||"").toLowerCase().includes(q) || String(x.id).includes(q) || (x.group||"").toLowerCase().includes(q) || (x.team||"").toLowerCase().includes(q));
   const {k,dir} = state.riderSort;
   const val = (x,key) => {
     const v = x[key];
@@ -2085,10 +2118,11 @@ function renderRiders(m){
   $("#riderBody").innerHTML = show.map(x=>`
     <tr>
       <td><div style="font-weight:500">${x.name||"—"}</div><div style="font-size:10.5px;color:var(--muted)" class="num">${x.id}</div></td>
+      <td style="font-size:11.5px;color:var(--ink2)">${esc(x.team || x.station || "—")}</td>
       <td style="font-size:12px;color:var(--ink2)">${x.group}</td>
       <td class="r num" style="border-right:2px solid var(--line)">${x.orders.toLocaleString()}</td>
       ${cells(x)}
-    </tr>`).join("") || `<tr><td colspan="${DIM_N+3}" style="text-align:center;color:var(--muted);padding:30px">没有匹配的骑手</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="${DIM_N+4}" style="text-align:center;color:var(--muted);padding:30px">没有匹配的骑手</td></tr>`;
   $("#more").innerHTML = list.length>show.length
     ? `<button class="ghost" id="moreBtn">再显示 200 人（剩 ${list.length-show.length}）</button>`
     : `<span style="font-size:11.5px;color:var(--muted)">已显示全部 ${list.length} 人</span>`;
@@ -2275,6 +2309,7 @@ async function loadDemo(){
       const total = +(r.orders * r.base * 0.75).toFixed(2);
       const adv = i % 6 === 0 ? 300 : 0;          // 每 6 个骑手有 300 元预支（源表写正数）
       return { rid:r.id, rname:r.name, period:"2026-08", group:r.g.label, station:r.g.station,
+               team:"T0" + (G.findIndex(x=>x.label===r.g.label) + 1),
                orders:r.orders, salary:(total - adv).toFixed(2), adv:String(adv), tax:(total * 0.02).toFixed(2) };
     });
 
@@ -2386,14 +2421,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if(!state.model) return;
     let head=[], rows=[];
     if(state.tab==="rider"){
-      head=["骑手","ID","商圈片","单量"];
+      head=["骑手","ID","团队","商圈片","单量"];
       DIM_CATS.forEach(g=>g.cols.forEach(([n])=>head.push(g.l1+"·"+n)));
       head=head.concat(["净利","净利率%","备注"]);
       rows=state.model.riders.map(x=>{
         const dd=x.dim||{};
         const vals=[];
         DIM_CATS.forEach(g=>g.cols.forEach(([,k])=>vals.push((dd[k]||0).toFixed(2))));
-        return [x.name,x.id,x.group,x.orders,...vals,x.net.toFixed(2),(x.rate||0).toFixed(1),
+        return [x.name,x.id,x.team||"",x.group,x.orders,...vals,x.net.toFixed(2),(x.rate||0).toFixed(1),
                 x.salaryRaw<0 ? `薪资原值 ${x.salaryRaw.toFixed(2)} 已按 0 计` : ""];
       });
     } else if(state.tab==="group"){
