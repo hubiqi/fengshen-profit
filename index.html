@@ -1351,6 +1351,7 @@ function compute(period){
   for(const [id,x] of Object.entries(riders)){
     if(x.salary >= 0) continue;
     const adj = -x.salary;
+    x.salaryRaw = x.salary;   // 账单原值（负数），界面上灰色划掉、计算仍按 0
     x.salary = 0;
     const m = riderGrpOrders[id] || {};
     const tot = Object.values(m).reduce((s,v)=>s+v,0);
@@ -2039,7 +2040,10 @@ function renderRiders(m){
       const signed = g.l1 !== "收入";
       for(const [,key] of g.cols){
         const v = d[key] || 0;
-        html += `<td class="r num g1 ${v<0?"neg":""}">${v<0?"−":(signed&&v>0?"+":"")}${money(Math.abs(v))}</td>`;
+        let txt = `${v<0?"−":(signed&&v>0?"+":"")}${money(Math.abs(v))}`;
+        if(key === "salary" && x.salaryRaw < 0)
+          txt = `${money(0)} <s style="color:var(--muted);font-weight:400">${"−" + money(Math.abs(x.salaryRaw))}</s>`;
+        html += `<td class="r num g1 ${v<0?"neg":""}">${txt}</td>`;
       }
     }
     html += `<td class="r num g1 ${x.net<0?"neg":"pos"}">${x.net<0?"−":""}${money(Math.abs(x.net))}</td>`;
@@ -2066,6 +2070,11 @@ function renderNotes(m){
   if(!m.groups.length) warn.push(`<li class="bad">没有可用商圈片：请检查骑手账单的「商圈片」列，或风神账单的「匹配类目」。</li>`);
   if(Math.abs(m.unassigned.amt)>1) warn.push(`<li class="warn">账单中有 <b>${m.unassigned.rows.toLocaleString()}</b> 行站点为 <code>-</code>，金额 <b>${money(Math.abs(m.unassigned.amt))}</b>，已按完单占比分摊。<a href="javascript:openUnassigned()" style="color:var(--blue);text-decoration:underline">查看明细 / 改归属</a></li>`);
   if(m.riders && m.riders.some(x => x.dim && x.group !== "-")) warn.push(`<li>骑手表与「商圈片」表<b>列完全一致</b>：收入 / 骑手成本 / 平台费 / 招聘 / 税赋 / 管理成本 → <b>净利 = 各列相加</b>。片里没落到具体骑手的收支按<b>单量占比</b>摊到人，逐列加总 = 片级数字，<b>骑手净利合计 = 整商净利</b>。</li>`);
+  const negSal = (m.riders||[]).filter(x => x.salaryRaw < 0);
+  if(negSal.length){
+    const amt = negSal.reduce((t,x)=>t - x.salaryRaw, 0);
+    warn.push(`<li class="warn"><b>${negSal.length}</b> 名骑手薪资合计为负，原值合计 <b>${money(amt)}</b>，已一律按 <b>0</b> 计入成本（扣不回来，也不冲利润）。骑手表「薪资」列的 <s style="color:var(--muted)">灰色划掉</s> 数字就是账单原值，整商 / 商圈片 / 骑手三处都按 0 计算，口径一致。</li>`);
+  }
   if(m.suspect && m.suspect.rows) warn.push(`<li class="warn">管理工资/报销里有 <b>${m.suspect.rows}</b> 行归属站点写成 <code>-</code>，金额 <b>${money(Math.abs(m.suspect.amt))}</b>，已按公司级分摊——手工表通常漏掉这部分，所以净利会比手工表更低。</li>`);
   if(m.billOrders && m.totalOrders && Math.abs(m.billOrders-m.totalOrders)/m.totalOrders>0.005)
     warn.push(`<li class="warn">完单口径差：骑手账单 <b>${m.totalOrders.toLocaleString()}</b> vs 平台逐单行 <b>${m.billOrders.toLocaleString()}</b>（${pct((m.billOrders-m.totalOrders)/m.totalOrders*100)}）。</li>`);
@@ -2331,12 +2340,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if(state.tab==="rider"){
       head=["骑手","ID","商圈片","单量"];
       DIM_CATS.forEach(g=>g.cols.forEach(([n])=>head.push(g.l1+"·"+n)));
-      head=head.concat(["净利","净利率%"]);
+      head=head.concat(["净利","净利率%","备注"]);
       rows=state.model.riders.map(x=>{
         const dd=x.dim||{};
         const vals=[];
         DIM_CATS.forEach(g=>g.cols.forEach(([,k])=>vals.push((dd[k]||0).toFixed(2))));
-        return [x.name,x.id,x.group,x.orders,...vals,x.net.toFixed(2),(x.rate||0).toFixed(1)];
+        return [x.name,x.id,x.group,x.orders,...vals,x.net.toFixed(2),(x.rate||0).toFixed(1),
+                x.salaryRaw<0 ? `薪资原值 ${x.salaryRaw.toFixed(2)} 已按 0 计` : ""];
       });
     } else if(state.tab==="group"){
       head=["商圈片","完单","毛收入","骑手成本","配送毛利","毛利/单","净利","净利率%","净利/单"];
