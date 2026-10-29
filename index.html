@@ -1329,7 +1329,11 @@ function compute(period){
   const other = { orders:0, rev:0, kpi:0, adj:0, guar:0, appeal:0, ins:0, viol:0, fee:0, collect:0, recruit:0 };
 
   // ---- 骑手账单 ----
+  // 没有骑手ID的行（合计/小计行、ID 没匹配上的记录）不参与核算：计入会与明细重复，还会被当成分摊源
+  const skipRider = { rows:0, salary:0, orders:0, list:[] };
+  let _rline = 0;
   for(const r of R.rows){
+    _rline++;
     if(period && rm.period !== undefined){ const p = ym(r[rm.period]); if(p && p !== period) continue; }
     const gg = riderGroup(r);
     const g = gg.key;
@@ -1337,6 +1341,15 @@ function compute(period){
     const o = num(r[rm.orders]);
     const sal = num(r[rm.salary]);
     const adv = Math.abs(num(r[rm.adv]));   // 预支=我方垫付的成本，源表写正写负都按绝对值计
+    if(rm.rid !== undefined && !id){
+      skipRider.rows++; skipRider.salary += sal; skipRider.orders += o;
+      if(skipRider.list.length < 5){
+        const nm = (rm.rname !== undefined ? String(r[rm.rname] ?? "").trim() : "") ||
+                   (rm.station !== undefined ? String(r[rm.station] ?? "").trim() : "");
+        skipRider.list.push(nm || `第 ${_rline} 行`);
+      }
+      continue;
+    }
     const a = mk(g);
     a.orders += o; a.cost.salary += sal; a.cost.adv += adv;
     if(id){
@@ -1619,7 +1632,7 @@ function compute(period){
 
   return { period, groups: groups.sort((a,b)=>b.orders-a.orders), sum, riders: riderList,
            company, unassigned:{rows:unassignedRows,amt:unassignedAmt,list:unassignedList}, billOrders,
-           unmapped, stationSrc: SM.src, suspect,
+           unmapped, stationSrc: SM.src, suspect, skipRider,
            totalOrders, kpiFromSheet, taxRates:{sal:TAX_SAL,vat:TAX_VAT} };
 }
 
@@ -2084,6 +2097,9 @@ function renderNotes(m){
   if(!m.groups.length) warn.push(`<li class="bad">没有可用商圈片：请检查骑手账单的「商圈片」列，或风神账单的「匹配类目」。</li>`);
   if(Math.abs(m.unassigned.amt)>1) warn.push(`<li class="warn">账单中有 <b>${m.unassigned.rows.toLocaleString()}</b> 行站点为 <code>-</code>，金额 <b>${money(Math.abs(m.unassigned.amt))}</b>，已按完单占比分摊。<a href="javascript:openUnassigned()" style="color:var(--blue);text-decoration:underline">查看明细 / 改归属</a></li>`);
   if(m.riders && m.riders.some(x => x.dim && x.group !== "-")) warn.push(`<li>骑手表与「商圈片」表<b>列完全一致</b>：收入 / 骑手成本 / 平台费 / 招聘 / 税赋 / 管理成本 → <b>净利 = 各列相加</b>。片里没落到具体骑手的收支按<b>单量占比</b>摊到人，逐列加总 = 片级数字，<b>骑手净利合计 = 整商净利</b>。</li>`);
+  if(m.skipRider && m.skipRider.rows){
+    warn.push(`<li class="warn">骑手账单里有 <b>${m.skipRider.rows}</b> 行<b>没有骑手ID</b>（${m.skipRider.list.map(esc).join("、")}${m.skipRider.rows>m.skipRider.list.length?"…":""}），薪资合计 <b>${money(Math.abs(m.skipRider.salary))}</b>、单量 ${Math.round(m.skipRider.orders).toLocaleString()}，已<b>整行跳过</b>——这类行通常是「合计/小计」行，或 ID 写法与主表不一致，计入会重复算一遍成本。</li>`);
+  }
   const allocSal = (m.riders||[]).filter(x => Math.abs(x.salaryAlloc||0) > 0.5);
   if(allocSal.length){
     const amt = allocSal.reduce((t,x)=>t - x.salaryAlloc, 0);
