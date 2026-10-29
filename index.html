@@ -291,32 +291,8 @@
         </div>
         <div style="overflow-x:auto">
         <table class="mx" style="font-size:11.5px" id="riderTable">
-          <thead>
-            <tr>
-              <th rowspan="2" class="s" data-k="name">骑手</th>
-              <th rowspan="2">商圈片</th>
-              <th rowspan="2" class="r s" data-k="orders" style="border-right:2px solid var(--line)">单量</th>
-              <th colspan="2" class="g1" style="text-align:center">收入</th>
-              <th colspan="4" class="g1" style="text-align:center">骑手成本</th>
-              <th colspan="2" class="g1" style="text-align:center">平台费</th>
-              <th class="g1" style="text-align:center">招聘</th>
-              <th class="g1" style="text-align:center">税赋</th>
-              <th class="g1" style="text-align:center">管理成本</th>
-              <th colspan="4" class="g1" style="text-align:center">结果</th>
-            </tr>
-            <tr>
-              <th class="r s g1" data-k="rev">配送费收入</th><th class="r s" data-k="allocRev">分摊收入</th>
-              <th class="r s g1" data-k="salary">薪资</th><th class="r s" data-k="adv">预支</th>
-              <th class="r s" data-k="pay">代付(个税)</th><th class="r s" data-k="allocRider">分摊骑手成本</th>
-              <th class="r s g1" data-k="other">保险+违规</th><th class="r s" data-k="allocPlatform">分摊平台费</th>
-              <th class="r s g1" data-k="allocRec">招聘分摊</th>
-              <th class="r s g1" data-k="allocTax">税赋分摊</th>
-              <th class="r s g1" data-k="allocMgmt">管理分摊</th>
-              <th class="r s g1" data-k="gross">毛利</th><th class="r s" data-k="net">净利</th>
-              <th class="r s" data-k="perNet">净利/单</th><th class="r s" data-k="costRate">成本率</th>
-            </tr>
-          </thead>
-          <tbody id="riderBody"></tbody>
+          <thead id="riderHead"></thead>
+        <tbody id="riderBody"></tbody>
         </table>
         </div>
         <div id="more" style="text-align:center;margin-top:12px"></div>
@@ -337,7 +313,7 @@
     <p><b>4. 招聘</b>：取《风神账单》中 <code>服务费 / 人力资源招聘服务费</code>，单列不并入服务费。</p>
     <p><b>5. 税赋</b>：<code>5.3% × (预支 + 薪资) + 6.72% × MAX(0, 毛收入 − 骑手成本 − 平台费)</code>。前者是灵工服务费，后者是差额征税。</p>
     <p><b>6. 固定成本</b>：管理工资 + 报销（按片归属）；公司级两项按<b>完单占比</b>分摊到片。</p>
-    <p><b>7. 骑手维度</b>：与商圈片<b>同一套一级分类</b>。<code>配送毛利 = 收入 + 分摊收入 − 薪资 − 预支 − 代付个税 − 分摊骑手成本</code>；<code>净利 = 配送毛利 + 保险违规 − 分摊平台费 − 招聘分摊 − 税赋分摊 − 管理分摊</code>。片里没有落到具体骑手的部分，按一级分类拆开后按骑手单量占比分到人：<b>分摊收入</b>（KPI/调整账/保障补贴/申诉返款/无骑手ID的配送收入）、<b>分摊骑手成本</b>（无骑手ID的薪资/预支/个税代付）、<b>分摊平台费</b>（无骑手ID的保险/违规+服务费+代收代付）、<b>招聘/税赋/管理</b>各自单列。分摊后<b>骑手净利合计 = 整商净利</b>。</p>
+    <p><b>7. 骑手维度</b>：与「商圈片」表<b>完全相同的列</b>——收入 6 项（基础配送费/强度补贴/KPI/调整账/保障补贴/申诉返款）、骑手成本 3 项（薪资/预支/代付个税）、平台费 4 项（保险/违规/服务费/代收代付）、招聘服务费、税赋、管理成本 3 项（站点管理/站点支出/城市分摊），最后是净利与净利率，<b>净利 = 上述所有列相加</b>。片里没落到具体骑手的收支（KPI/调整账/保障/申诉、无骑手ID的薪资/预支/个税、服务费/代收代付/招聘/税赋/管理成本），按<b>骑手单量占比</b>摊到人，所以逐列加总等于片级同行数字，<b>骑手净利合计 = 整商净利</b>。</p>
     <p><b>8. 无归属行</b>：账单里站点字段为 <code>-</code> 的金额，按当月各片完单占比分摊，与手工表一致；若该行能识别到骑手ID，则直接用骑手所在的片，不再进分摊池。点击「数据校验」里的提示可以逐行查看明细，必要时把某行直接指定到某个片（逐行优先级最高，保存在本机）。</p>
   </div>
 </div>
@@ -1347,7 +1323,7 @@ function compute(period){
   const riders = {};   // riderId -> agg
   const riderG = {};   // riderId -> 商圈片（账单里没写站点的行，用骑手所属片回填）
   const riderGrpOrders = {};  // riderId -> { 片key: 单量 }（跨站骑手的个税按单量拆）
-  const mkR = (id,g,label,name) => riders[id] || (riders[id] = { id, name:name||"", gkey:g||"-", group:label||"-", orders:0, rev:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
+  const mkR = (id,g,label,name) => riders[id] || (riders[id] = { id, name:name||"", gkey:g||"-", group:label||"-", orders:0, rev:0, base:0, stren:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
   let unassignedRows = 0, unassignedAmt = 0, billOrders = 0;
   const unassignedList = [];
   const other = { orders:0, rev:0, kpi:0, adj:0, guar:0, appeal:0, ins:0, viol:0, fee:0, collect:0, recruit:0 };
@@ -1427,7 +1403,7 @@ function compute(period){
       const dt = bm.detail!==undefined ? String(r[bm.detail]??"").trim() : "";
       a.rev.base += base; a.rev.stren += stren;
       add3(a,"base",dt,base); add3(a,"stren","强度补贴",stren);
-      if(rid){ const x = mkR(rid,g,gg.label,rname); x.rev += base + stren; }
+      if(rid){ const x = mkR(rid,g,gg.label,rname); x.rev += base + stren; x.base += base; x.stren += stren; }
       continue;
     }
     if(type==="配送费" && sub==="配送费支付调整") continue;  // 已通过薪资还原
@@ -1568,49 +1544,61 @@ function compute(period){
   sum.contribution = sum.orders ? (sum.rev - sum.riderCost + sum.platform + sum.tax)/sum.orders : 0;
   sum.breakeven = sum.contribution>0 ? sum.fixed / sum.contribution : Infinity;
 
-  // 片内分摊：该片「没有落到具体骑手」的收支净额（成本−收入），按骑手单量占比分到人
+  // 片内分摊：与「商圈片」表【同一套列】。片里没落到具体骑手的收支，按骑手单量占比分到人
+  // 分摊后：骑手每列加总 = 片级同行数字，骑手净利合计 = 整商净利
+  const DIM_KEYS = ["base","stren","kpi","adj","guar","appeal",
+                    "salary","adv","pay","ins","viol","fee","collect",
+                    "recruit","tax","wage","reimb","alloc"];
+  const groupDim = a => {
+    const c = a.cost, i = a.inc || {};
+    return { base:i.base||0, stren:i.stren||0, kpi:i.kpi||0, adj:i.adj||0, guar:i.guar||0, appeal:i.appeal||0,
+             salary:-c.salary, adv:-c.adv, pay:-c.pay,
+             ins:c.ins, viol:c.viol, fee:c.fee, collect:c.collect,
+             recruit:c.recruit, tax:a.tax||0, wage:-a.wage, reimb:-a.reimb, alloc:-a.alloc };
+  };
+  const riderDimOf = x => ({ base:x.base||0, stren:x.stren||0, kpi:0, adj:0, guar:0, appeal:0,
+             salary:-(x.salary||0), adv:-(x.adv||0), pay:-(x.pay||0),
+             ins:x.ins||0, viol:x.viol||0, fee:0, collect:0,
+             recruit:0, tax:0, wage:0, reimb:0, alloc:0 });
   const ridersByGroup = {};
   for(const x of Object.values(riders)){ (ridersByGroup[x.gkey] || (ridersByGroup[x.gkey] = [])).push(x); }
   for(const a of groups){
     const rs = ridersByGroup[a.key];
     if(!rs || !rs.length) continue;
-    const S = f => rs.reduce((s,x) => s + f(x), 0);
-    // 没落到具体骑手头上的部分，按「一级分类」拆开，才能和商圈片表逐列对上
-    const rSal = S(x=>x.salary), rAdv = S(x=>x.adv), rPay = S(x=>x.pay||0);
-    const rIns = S(x=>-x.ins), rVio = S(x=>-x.viol);
-    const unattrRiderCost = (a.cost.salary - rSal) + (a.cost.adv - rAdv) + (a.cost.pay - rPay);
-    const unattrPlatform  = ((-a.cost.ins) - rIns) + ((-a.cost.viol) - rVio)
-                          + (-a.cost.fee) + (-a.cost.collect);
-    const unattrRev = a.rev - S(x=>x.rev);
-    const totO = S(x=>x.orders);
-    const recMag  = -a.cost.recruit;              // 招聘
-    const taxMag  = -a.tax;                       // 税赋
-    const mgmtMag = a.wage + a.reimb + a.alloc;   // 管理成本（站点工资+报销+城市分摊）
-    for(const x of rs){
+    const gd = groupDim(a);
+    const owns = rs.map(riderDimOf);
+    const totO = rs.reduce((t,x)=>t + x.orders, 0);
+    const totOwn = {};
+    for(const k of DIM_KEYS) totOwn[k] = owns.reduce((t,o)=>t + o[k], 0);
+    rs.forEach((x, i) => {
       const w = totO ? x.orders/totO : 0;
-      x.allocRev      = unattrRev       * w;   // 摊到的片级收入（KPI、调整账、保障补贴、申诉返款）
-      x.allocRider    = unattrRiderCost * w;   // 摊到的骑手成本（无骑手ID的薪资/预支/个税代付）
-      x.allocPlatform = unattrPlatform  * w;   // 摊到的平台费（保险/违规/服务费/代收代付）
-      x.allocRec      = recMag          * w;   // 招聘
-      x.allocTax      = taxMag          * w;   // 税赋
-      x.allocMgmt     = mgmtMag         * w;   // 管理成本
-      x.alloc = x.allocRider + x.allocPlatform + x.allocRec - x.allocRev;
-    }
+      const dim = {};
+      for(const k of DIM_KEYS) dim[k] = owns[i][k] + (gd[k] - totOwn[k]) * w;
+      x.dim = dim;
+      // 旧字段保留（口径说明 / 老表单用），值从 dim 反推
+      x.allocRev      = (dim.base - owns[i].base) + (dim.stren - owns[i].stren)
+                      + dim.kpi + dim.adj + dim.guar + dim.appeal;
+      x.allocRider    = -((dim.salary - owns[i].salary) + (dim.adv - owns[i].adv) + (dim.pay - owns[i].pay));
+      x.allocPlatform = -((dim.ins - owns[i].ins) + (dim.viol - owns[i].viol) + dim.fee + dim.collect);
+      x.allocRec      = -dim.recruit;
+      x.allocTax      = -dim.tax;
+      x.allocMgmt     = -(dim.wage + dim.reimb + dim.alloc);
+      x.alloc         = x.allocRider + x.allocPlatform + x.allocRec - x.allocRev;
+      x.revAll        = dim.base + dim.stren + dim.kpi + dim.adj + dim.guar + dim.appeal;
+      x.gross         = dim.base + dim.stren + dim.kpi + dim.adj + dim.guar + dim.appeal
+                      + dim.salary + dim.adv + dim.pay;
+      x.net           = DIM_KEYS.reduce((t,k)=>t + dim[k], 0);
+    });
   }
 
   // 骑手维度
   const riderList = Object.values(riders).map(x => {
-    const allocRev = x.allocRev||0, allocRider = x.allocRider||0, allocPlatform = x.allocPlatform||0,
-          allocRec = x.allocRec||0, allocTax = x.allocTax||0, allocMgmt = x.allocMgmt||0;
-    const pay = x.pay||0;
-    // 与商圈片同一套一级分类：
-    // 配送毛利 = 收入 + 分摊收入 − 薪资 − 预支 − 代付个税 − 分摊骑手成本
-    const gross = x.rev + allocRev - x.salary - x.adv - pay - allocRider;
-    // 净利 = 毛利 + 保险违规 − 分摊平台费 − 招聘分摊 − 税赋分摊 − 管理分摊
-    const net = gross + x.ins + x.viol - allocPlatform - allocRec - allocTax - allocMgmt;
-    return { ...x, pay, allocRev, allocRider, allocPlatform, allocRec, allocTax, allocMgmt,
-             alloc: allocRider + allocPlatform + allocRec - allocRev,
-             gross, net, per: x.orders? gross/x.orders:0, perNet: x.orders? net/x.orders:0,
+    const dim = x.dim || riderDimOf(x);
+    const pay = x.pay||0, net = x.net||0, revAll = x.revAll||0;
+    const gross = x.gross||0;
+    return { ...x, dim, pay, gross, net, revAll,
+             per: x.orders? gross/x.orders:0, perNet: x.orders? net/x.orders:0,
+             rate: revAll? net/revAll*100 : 0,
              costRate: x.rev? (x.salary+x.adv+pay)/x.rev*100 : 0,
              other: x.ins + x.viol };
   }).filter(x => x.orders>0 || x.rev!==0 || x.salary!==0 || x.adv!==0 || x.ins!==0 || x.viol!==0);
@@ -2002,41 +1990,69 @@ function exportGroupsCsv(){
   flash("商圈片明细已导出");
 }
 
+const DIM_CATS = [
+  { l1:"收入", cols:[["基础配送费","base"],["强度补贴","stren"],["KPI 考核","kpi"],["调整账","adj"],["配送保障补贴","guar"],["申诉返款","appeal"]] },
+  { l1:"骑手成本", cols:[["薪资","salary"],["预支","adv"],["代付(个税)","pay"]] },
+  { l1:"平台费", cols:[["保险","ins"],["违规","viol"],["服务费","fee"],["代收代付","collect"]] },
+  { l1:"招聘", cols:[["招聘服务费","recruit"]] },
+  { l1:"税赋", cols:[["税赋","tax"]] },
+  { l1:"管理成本", cols:[["站点管理","wage"],["站点支出","reimb"],["城市分摊","alloc"]] }
+];
+const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length, 0) + 2;   // + 净利 + 净利率
+let _riderHeadBuilt = false;
+function buildRiderHead(){
+  if(_riderHeadBuilt) return;
+  _riderHeadBuilt = true;
+  const el = $("#riderHead"); if(!el) return;
+  el.innerHTML =
+    `<tr><th rowspan="2" class="s" data-k="name">骑手</th><th rowspan="2">商圈片</th>` +
+    `<th rowspan="2" class="r s" data-k="orders" style="border-right:2px solid var(--line)">单量</th>` +
+    DIM_CATS.map(g=>`<th colspan="${g.cols.length}" class="g1" style="text-align:center">${g.l1}</th>`).join("") +
+    `<th colspan="2" class="g1" style="text-align:center">结果</th></tr><tr>` +
+    DIM_CATS.map(g=>g.cols.map(([n,k])=>`<th class="r s g1" data-k="${k}">${n}</th>`).join("")).join("") +
+    `<th class="r s g1" data-k="net">净利</th><th class="r s" data-k="rate">净利率</th></tr>`;
+}
 function renderRiders(m){
+  buildRiderHead();
   let list = m.riders.slice();
   const q = state.riderQ.trim().toLowerCase();
   if(q) list = list.filter(x => (x.name||"").toLowerCase().includes(q) || String(x.id).includes(q) || (x.group||"").toLowerCase().includes(q));
   const {k,dir} = state.riderSort;
-  list.sort((a,b)=> (num(a[k])-num(b[k]))*dir );
+  const val = (x,key) => {
+    const v = x[key];
+    if(v !== undefined && typeof v !== "object") return num(v);
+    return num((x.dim||{})[key]);
+  };
+  list.sort((x,y)=>{
+    if(k === "name") return String(x.name||"").localeCompare(String(y.name||""), "zh") * dir;
+    return (val(x,k) - val(y,k)) * dir;
+  });
   const show = list.slice(0, state.riderLimit);
   $("#riderCount").textContent = list.length.toLocaleString() + " 人";
   const _f = v => (v<0?"−":"")+money(Math.abs(v));
-  const _gross = list.reduce((s,x)=>s+x.gross,0), _net = list.reduce((s,x)=>s+x.net,0);
-  $("#riderHint").textContent = `配送毛利 ${_f(_gross)}（=∑片配送毛利）· 净利 ${_f(_net)}（=整商净利）· 人均净利 ${_f(list.length? _net/list.length:0)}`;
-  const neg = v => (Math.abs(v||0)<0.5 ? "—" : "−"+money(Math.abs(v)));
-  const pos = v => (Math.abs(v||0)<0.5 ? "—" : money(v));
-  const sgn = v => (Math.abs(v||0)<0.5 ? "—" : (v<0?"−":"+")+money(Math.abs(v)));
+  const _gross = list.reduce((t,x)=>t + x.gross, 0), _net = list.reduce((t,x)=>t + x.net, 0);
+  $("#riderHint").textContent = `配送毛利 ${_f(_gross)} · 净利 ${_f(_net)}（=整商净利）· 人均净利 ${_f(list.length? _net/list.length : 0)} · 列与「商圈片」完全一致，逐列加总 = 片级`;
+  const cells = x => {
+    const d = x.dim || {};
+    let html = "";
+    for(const g of DIM_CATS){
+      const signed = g.l1 !== "收入";
+      for(const [,key] of g.cols){
+        const v = d[key] || 0;
+        html += `<td class="r num g1 ${v<0?"neg":""}">${v<0?"−":(signed&&v>0?"+":"")}${money(Math.abs(v))}</td>`;
+      }
+    }
+    html += `<td class="r num g1 ${x.net<0?"neg":"pos"}">${x.net<0?"−":""}${money(Math.abs(x.net))}</td>`;
+    html += `<td class="r num ${x.rate<0?"neg":""}">${pct(x.rate||0)}</td>`;
+    return html;
+  };
   $("#riderBody").innerHTML = show.map(x=>`
     <tr>
       <td><div style="font-weight:500">${x.name||"—"}</div><div style="font-size:10.5px;color:var(--muted)" class="num">${x.id}</div></td>
       <td style="font-size:12px;color:var(--ink2)">${x.group}</td>
-      <td class="r num">${x.orders.toLocaleString()}</td>
-      <td class="r num">${money(x.rev)}</td>
-      <td class="r num pos">${pos(x.allocRev)}</td>
-      <td class="r num neg">${neg(x.salary)}</td>
-      <td class="r num neg">${neg(x.adv)}</td>
-      <td class="r num neg">${neg(x.pay)}</td>
-      <td class="r num neg">${neg(x.allocRider)}</td>
-      <td class="r num ${x.other<0?"neg":""}">${sgn(x.other)}</td>
-      <td class="r num ${x.allocPlatform>0?"neg":"pos"}">${sgn(-x.allocPlatform)}</td>
-      <td class="r num neg">${neg(x.allocRec)}</td>
-      <td class="r num neg">${neg(x.allocTax)}</td>
-      <td class="r num neg">${neg(x.allocMgmt)}</td>
-      <td class="r num ${x.gross<0?"neg":"pos"}">${x.gross<0?"−":""}${money(Math.abs(x.gross))}</td>
-      <td class="r num ${x.net<0?"neg":"pos"}">${x.net<0?"−":""}${money(Math.abs(x.net))}</td>
-      <td class="r num ${x.perNet<0?"neg":"pos"}">${num2(x.perNet)}</td>
-      <td class="r num">${pct(x.costRate)}</td>
-    </tr>`).join("") || `<tr><td colspan="18" style="text-align:center;color:var(--muted);padding:30px">没有匹配的骑手</td></tr>`;
+      <td class="r num" style="border-right:2px solid var(--line)">${x.orders.toLocaleString()}</td>
+      ${cells(x)}
+    </tr>`).join("") || `<tr><td colspan="${DIM_N+3}" style="text-align:center;color:var(--muted);padding:30px">没有匹配的骑手</td></tr>`;
   $("#more").innerHTML = list.length>show.length
     ? `<button class="ghost" id="moreBtn">再显示 200 人（剩 ${list.length-show.length}）</button>`
     : `<span style="font-size:11.5px;color:var(--muted)">已显示全部 ${list.length} 人</span>`;
@@ -2049,7 +2065,7 @@ function renderNotes(m){
     warn.push(`<li class="bad"><b>${m.unmapped.length}</b> 个站点没匹配到商圈片（${m.unmapped.slice(0,4).join("、")}${m.unmapped.length>4?"…":""}），当前按站点单独成组。<a href="javascript:openMap()" style="color:var(--blue);text-decoration:underline">现在指定</a></li>`);
   if(!m.groups.length) warn.push(`<li class="bad">没有可用商圈片：请检查骑手账单的「商圈片」列，或风神账单的「匹配类目」。</li>`);
   if(Math.abs(m.unassigned.amt)>1) warn.push(`<li class="warn">账单中有 <b>${m.unassigned.rows.toLocaleString()}</b> 行站点为 <code>-</code>，金额 <b>${money(Math.abs(m.unassigned.amt))}</b>，已按完单占比分摊。<a href="javascript:openUnassigned()" style="color:var(--blue);text-decoration:underline">查看明细 / 改归属</a></li>`);
-  if(m.riders && m.riders.some(x => x.allocRev || x.allocRider || x.allocPlatform)) warn.push(`<li>骑手行与商圈片同一套一级分类：<b>配送毛利 = 收入 + 分摊收入 − 薪资 − 预支 − 代付个税 − 分摊骑手成本</b>，<b>净利 = 配送毛利 + 保险违规 − 分摊平台费 − 招聘分摊 − 税赋分摊 − 管理分摊</b>。片里没落到具体骑手的部分按一级分类拆开、再按单量占比分到人，所以逐列加总能还原片级数字，<b>骑手净利合计 = 整商净利</b>。</li>`);
+  if(m.riders && m.riders.some(x => x.dim && x.group !== "-")) warn.push(`<li>骑手表与「商圈片」表<b>列完全一致</b>：收入 / 骑手成本 / 平台费 / 招聘 / 税赋 / 管理成本 → <b>净利 = 各列相加</b>。片里没落到具体骑手的收支按<b>单量占比</b>摊到人，逐列加总 = 片级数字，<b>骑手净利合计 = 整商净利</b>。</li>`);
   if(m.suspect && m.suspect.rows) warn.push(`<li class="warn">管理工资/报销里有 <b>${m.suspect.rows}</b> 行归属站点写成 <code>-</code>，金额 <b>${money(Math.abs(m.suspect.amt))}</b>，已按公司级分摊——手工表通常漏掉这部分，所以净利会比手工表更低。</li>`);
   if(m.billOrders && m.totalOrders && Math.abs(m.billOrders-m.totalOrders)/m.totalOrders>0.005)
     warn.push(`<li class="warn">完单口径差：骑手账单 <b>${m.totalOrders.toLocaleString()}</b> vs 平台逐单行 <b>${m.billOrders.toLocaleString()}</b>（${pct((m.billOrders-m.totalOrders)/m.totalOrders*100)}）。</li>`);
@@ -2312,8 +2328,15 @@ document.addEventListener("DOMContentLoaded", () => {
     if(!state.model) return;
     let head=[], rows=[];
     if(state.tab==="rider"){
-      head=["骑手","ID","商圈片","单量","配送费收入","分摊收入","薪资","预支","代付个税","分摊骑手成本","保险+违规","分摊平台费","招聘分摊","税赋分摊","管理分摊","毛利","净利","净利/单","成本率%"];
-      rows=state.model.riders.map(x=>[x.name,x.id,x.group,x.orders,x.rev.toFixed(2),(x.allocRev||0).toFixed(2),x.salary.toFixed(2),x.adv.toFixed(2),(x.pay||0).toFixed(2),(x.allocRider||0).toFixed(2),x.other.toFixed(2),(x.allocPlatform||0).toFixed(2),(x.allocRec||0).toFixed(2),(x.allocTax||0).toFixed(2),(x.allocMgmt||0).toFixed(2),x.gross.toFixed(2),x.net.toFixed(2),x.perNet.toFixed(2),x.costRate.toFixed(1)]);
+      head=["骑手","ID","商圈片","单量"];
+      DIM_CATS.forEach(g=>g.cols.forEach(([n])=>head.push(g.l1+"·"+n)));
+      head=head.concat(["净利","净利率%"]);
+      rows=state.model.riders.map(x=>{
+        const dd=x.dim||{};
+        const vals=[];
+        DIM_CATS.forEach(g=>g.cols.forEach(([,k])=>vals.push((dd[k]||0).toFixed(2))));
+        return [x.name,x.id,x.group,x.orders,...vals,x.net.toFixed(2),(x.rate||0).toFixed(1)];
+      });
     } else if(state.tab==="group"){
       head=["商圈片","完单","毛收入","骑手成本","配送毛利","毛利/单","净利","净利率%","净利/单"];
       rows=state.model.groups.map(a=>[a.name,a.orders,a.rev.toFixed(2),a.riderCost.toFixed(2),a.gross.toFixed(2),a.perOrder.toFixed(2),a.profit.toFixed(2),(a.rev?a.profit/a.rev*100:0).toFixed(1),a.perProfit.toFixed(2)]);
