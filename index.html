@@ -1329,9 +1329,16 @@ function compute(period){
   const riderG = {};   // riderId -> 商圈片（账单里没写站点的行，用骑手所属片回填）
   const riderGrpOrders = {};  // riderId -> { 片key: 单量 }（跨站骑手的个税按单量拆）
   // 一人一团队一行：骑手ID + 团队ID 才是唯一键（同一人在两个团队/站点跑单就拆两行）
+  // 团队ID 是主键的一半：账单里常写「团队名称/站点名」，用骑手账单学到的 站点名→团队ID 映射还原
+  const teamIdByStation = {};
+  const resolveTeamId = raw => {
+    const tn = N(String(raw == null ? "" : raw).trim());
+    if(!tn) return "";
+    return teamIdByStation[tn] || tn;
+  };
   const mkR = (id,g,label,name,team,station) => {
     const t = String(team == null ? "" : team).trim();
-    const tn = t ? N(t) : "";
+    const tn = resolveTeamId(t);
     const st = String(station == null ? "" : station).trim();
     const key = id + "|" + (tn || N(st) || g || "-");
     return riders[key] || (riders[key] = { id, key, name:name||"", team:t, teamN:tn,
@@ -1343,7 +1350,7 @@ function compute(period){
   // 风神账单的一行可能对应骑手的多行（跨团队且团队名对不上）：返回 [行, 权重]
   const riderRowsFor = (id, g, label, name, team, station) => {
     const t = String(team == null ? "" : team).trim();
-    const tn = t ? N(t) : "";
+    const tn = resolveTeamId(t);
     const st = String(station == null ? "" : station).trim();
     const sn = st ? N(st) : "";
     const key = id + "|" + (tn || sn || g || "-");
@@ -1380,6 +1387,7 @@ function compute(period){
   };
   let unassignedRows = 0, unassignedAmt = 0, billOrders = 0;
   const billTypes = {};   // 账单类型|业务类型 -> {rows, amt, base, stren}
+  const teamSeen = new Set();   // 风神账单里出现过的团队名（带骑手ID的配送收入行）
   const unassignedList = [];
   const other = { orders:0, rev:0, kpi:0, adj:0, guar:0, appeal:0, ins:0, viol:0, fee:0, collect:0, recruit:0 };
 
@@ -1418,6 +1426,12 @@ function compute(period){
       riderG[id] = g;
       (riderGrpOrders[id] || (riderGrpOrders[id] = {}))[g] = ((riderGrpOrders[id][g])||0) + o;
     }
+  }
+
+  // 学会「站点名/团队名 → 团队ID」，供风神账单匹配用（团队ID + 骑手ID 才是唯一键）
+  for(const x of Object.values(riders)){
+    if(x.teamN && x.stationN && !teamIdByStation[x.stationN]) teamIdByStation[x.stationN] = x.teamN;
+    if(x.teamN && !teamIdByStation[x.teamN]) teamIdByStation[x.teamN] = x.teamN;
   }
 
   // ---- 薪资合计为负的骑手（扣款超过跑单收入）扣不回来，按 0 计 ----
@@ -1481,6 +1495,7 @@ function compute(period){
       bt.rows++; bt.amt += amt; bt.base += base; bt.stren += stren;
       if(rid){
         const billTeam = bm.team !== undefined ? r[bm.team] : "";
+        if(String(billTeam||"").trim()) teamSeen.add(String(billTeam).trim());
         for(const [x, w] of riderRowsFor(rid, g, gg.label, rname, billTeam, "")){
           x.rev += (base + stren) * w;
           x.base += base * w; x.stren += stren * w;
@@ -1701,9 +1716,12 @@ function compute(period){
     unmapped = [...seen];
   }
 
+  const allTeamKeys = new Set();
+  for(const x of Object.values(riders)){ if(x.teamN) allTeamKeys.add(x.teamN); if(x.stationN) allTeamKeys.add(x.stationN); }
+  const teamUnmapped = [...teamSeen].filter(t => !allTeamKeys.has(N(t)));
   const billCols = {};
   if(B.names){ for(const k of ["date","type","sub","amt","base","stren","rid","team","cat"]) billCols[k] = B.names[k] || ""; }
-  return { period, billTypes, billCols, groups: groups.sort((a,b)=>b.orders-a.orders), sum, riders: riderList,
+  return { period, billTypes, billCols, teamUnmapped, groups: groups.sort((a,b)=>b.orders-a.orders), sum, riders: riderList,
            company, unassigned:{rows:unassignedRows,amt:unassignedAmt,list:unassignedList}, billOrders,
            unmapped, stationSrc: SM.src, suspect, skipRider,
            totalOrders, kpiFromSheet, taxRates:{sal:TAX_SAL,vat:TAX_VAT} };
@@ -2194,6 +2212,10 @@ function renderNotes(m){
         list.map(([k,v])=>`<code>${esc(k)}</code> ${v.rows.toLocaleString()} 行 / 金额 ${money(Math.abs(v.amt))}` +
           (v.base||v.stren ? `（基础 ${money(v.base)} + 强度 ${money(v.stren)}）` : "")).join("；") + `</li>`);
     }
+  }
+  const unmappedTeam = (m.teamUnmapped || []);
+  if(unmappedTeam.length){
+    warn.push(`<li class="warn">风神账单里有 <b>${unmappedTeam.length}</b> 个团队名找不到对应的团队ID（${unmappedTeam.slice(0,4).map(esc).join("、")}${unmappedTeam.length>4?"…":""}）——骑手账单里没有同名站点/团队列时会出现。这部分收入按<b>骑手ID</b>就近归到他该片的行（他在该片只有一行时全给他，多行时按单量拆）。</li>`);
   }
   if(m.skipRider && m.skipRider.rows){
     warn.push(`<li class="warn">骑手账单里有 <b>${m.skipRider.rows}</b> 行<b>没有骑手ID</b>（${m.skipRider.list.map(esc).join("、")}${m.skipRider.rows>m.skipRider.list.length?"…":""}），薪资合计 <b>${money(Math.abs(m.skipRider.salary))}</b>、单量 ${Math.round(m.skipRider.orders).toLocaleString()}，已<b>整行跳过</b>——这类行通常是「合计/小计」行，或 ID 写法与主表不一致，计入会重复算一遍成本。</li>`);
