@@ -1342,6 +1342,8 @@ function compute(period){
     if(id){
       const x = mkR(id, g, gg.label, r[rm.rname]);
       x.orders += o; x.salary += sal; x.adv += adv;
+      (x.gsal || (x.gsal = {}))[g] = ((x.gsal[g]) || 0) + sal;
+      (x.gadv || (x.gadv = {}))[g] = ((x.gadv[g]) || 0) + adv;
       riderG[id] = g;
       (riderGrpOrders[id] || (riderGrpOrders[id] = {}))[g] = ((riderGrpOrders[id][g])||0) + o;
     }
@@ -1597,7 +1599,10 @@ function compute(period){
     const dim = x.dim || riderDimOf(x);
     const pay = x.pay||0, net = x.net||0, revAll = x.revAll||0;
     const gross = x.gross||0;
+    const salaryOwn = -(x.salary||0);          // 本人账单薪资（已含负薪资按 0 计）
     return { ...x, dim, pay, gross, net, revAll,
+             salaryOwn, salaryAlloc: (dim.salary||0) - salaryOwn,
+             crossGroups: x.gsal ? Object.keys(x.gsal).length : 1,
              per: x.orders? gross/x.orders:0, perNet: x.orders? net/x.orders:0,
              rate: revAll? net/revAll*100 : 0,
              costRate: x.rev? (x.salary+x.adv+pay)/x.rev*100 : 0,
@@ -2041,9 +2046,18 @@ function renderRiders(m){
       for(const [,key] of g.cols){
         const v = d[key] || 0;
         let txt = `${v<0?"−":(signed&&v>0?"+":"")}${money(Math.abs(v))}`;
-        if(key === "salary" && x.salaryRaw < 0)
-          txt = `${money(0)} <s style="color:var(--muted);font-weight:400">${"−" + money(Math.abs(x.salaryRaw))}</s>`;
-        html += `<td class="r num g1 ${v<0?"neg":""}">${txt}</td>`;
+        let tip = "";
+        if(key === "salary"){
+          if(x.salaryRaw < 0)
+            txt = `${money(0)} <s style="color:var(--muted);font-weight:400">${"−" + money(Math.abs(x.salaryRaw))}</s>`;
+          const parts = [`本人账单：${money(Math.abs(x.salaryOwn))}`];
+          if(Math.abs(x.salaryAlloc) > 0.5)
+            parts.push(`片内分摊（无骑手ID的薪资行）：${x.salaryAlloc<0?"−":"+"}${money(Math.abs(x.salaryAlloc))}`);
+          if(x.salaryRaw < 0) parts.push(`账单原值：−${money(Math.abs(x.salaryRaw))}（负薪资按 0 计）`);
+          if(x.crossGroups > 1) parts.push(`该骑手在 ${x.crossGroups} 个片都有薪资行，本表按首个片归集`);
+          tip = ` title="${parts.join(" ｜ ")}"`;
+        }
+        html += `<td class="r num g1 ${v<0?"neg":""}"${tip}>${txt}</td>`;
       }
     }
     html += `<td class="r num g1 ${x.net<0?"neg":"pos"}">${x.net<0?"−":""}${money(Math.abs(x.net))}</td>`;
@@ -2070,6 +2084,15 @@ function renderNotes(m){
   if(!m.groups.length) warn.push(`<li class="bad">没有可用商圈片：请检查骑手账单的「商圈片」列，或风神账单的「匹配类目」。</li>`);
   if(Math.abs(m.unassigned.amt)>1) warn.push(`<li class="warn">账单中有 <b>${m.unassigned.rows.toLocaleString()}</b> 行站点为 <code>-</code>，金额 <b>${money(Math.abs(m.unassigned.amt))}</b>，已按完单占比分摊。<a href="javascript:openUnassigned()" style="color:var(--blue);text-decoration:underline">查看明细 / 改归属</a></li>`);
   if(m.riders && m.riders.some(x => x.dim && x.group !== "-")) warn.push(`<li>骑手表与「商圈片」表<b>列完全一致</b>：收入 / 骑手成本 / 平台费 / 招聘 / 税赋 / 管理成本 → <b>净利 = 各列相加</b>。片里没落到具体骑手的收支按<b>单量占比</b>摊到人，逐列加总 = 片级数字，<b>骑手净利合计 = 整商净利</b>。</li>`);
+  const allocSal = (m.riders||[]).filter(x => Math.abs(x.salaryAlloc||0) > 0.5);
+  if(allocSal.length){
+    const amt = allocSal.reduce((t,x)=>t - x.salaryAlloc, 0);
+    warn.push(`<li class="warn"><b>${allocSal.length}</b> 名骑手的「骑手薪资」里含<b>片内分摊</b>合计 <b>${money(Math.abs(amt))}</b>——来源是骑手账单里<b>没有骑手ID</b>（或 ID 匹配不上）的薪资行，按单量摊给了同片骑手。鼠标停在该格上可看「本人 / 分摊」拆分。</li>`);
+  }
+  const cross = (m.riders||[]).filter(x => x.crossGroups > 1);
+  if(cross.length){
+    warn.push(`<li class="warn"><b>${cross.length}</b> 名骑手在多个片都有薪资行（${cross.slice(0,3).map(x=>esc(x.name)).join("、")}${cross.length>3?"…":""}），本表按他<b>首个片</b>归集，所以他那一行会与单片的账单对不上，但整商合计不受影响。</li>`);
+  }
   const negSal = (m.riders||[]).filter(x => x.salaryRaw < 0);
   if(negSal.length){
     const amt = negSal.reduce((t,x)=>t - x.salaryRaw, 0);
