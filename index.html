@@ -28,6 +28,8 @@
   .spacer{flex:1}
   select,button.ghost{border:1px solid var(--line);background:var(--card);border-radius:9px;padding:7px 11px;font-size:13px;color:var(--ink);outline:none}
   select:hover,button.ghost:hover{border-color:#cfcac1}
+  button.ghost.unitBtn{white-space:nowrap}
+  button.ghost.unitBtn.on{background:var(--ink);color:#fff;border-color:var(--ink)}
   button.primary{background:var(--ink);color:#fff;border:0;border-radius:10px;padding:10px 20px;font-size:13.5px;font-weight:600}
   button.primary:disabled{opacity:.35;cursor:not-allowed}
   .status{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px}
@@ -263,6 +265,7 @@
         <div class="sub">最小核算单元（片/圈）。表头为一级分类 + 二级科目；公司级管理工资与报销按完单占比分摊。表格较宽，可左右滚动 →</div>
         <div class="toolbar">
           <label class="chk"><input type="checkbox" id="l3Group"> 显示三级分类</label>
+          <button class="ghost unitBtn" id="groupUnit">单均（元/单）</button>
           <div class="spacer"></div><button class="ghost" id="groupCsvBtn">导出商圈片明细 CSV</button>
         </div>
         <div style="overflow-x:auto" id="groupWrap">
@@ -286,6 +289,7 @@
         <div class="toolbar">
           <input type="search" id="rq" placeholder="搜骑手姓名 / ID / 片区">
           <span class="hint" id="riderHint"></span>
+          <button class="ghost unitBtn" id="riderUnit">单均（元/单）</button>
           <div class="spacer"></div>
           <span class="hint">点表头排序</span>
         </div>
@@ -628,7 +632,7 @@ const SLOTS = [
     sheet:["kpi","绩效达成明细"] }
 ];
 
-const state = { files:{}, periods:[], model:null, period:null, tab:"all", riderSort:{k:"gross",dir:-1}, riderLimit:200, riderQ:"", byStation:true, busy:false, showL3:false };
+const state = { files:{}, periods:[], model:null, period:null, tab:"all", riderSort:{k:"gross",dir:-1}, riderLimit:200, riderQ:"", byStation:true, busy:false, showL3:false, perUnit:false };
 
 /* ================= 管理工资 / 报销 模板 ================= */
 const TEMPLATES = {
@@ -1944,21 +1948,22 @@ function renderGroupMatrix(m){
     totalD.map(g=>g.cols.map(c=>`<th class="r g1">${c.n}</th>`).join("")).join("") +
     `</tr>`;
 
-  const cellsOf = d => d.map(g=>{
+  const cellsOf = (d, ord) => d.map(g=>{
     const signed = g.l1!=="收入" && g.l1!=="净利";
     return g.cols.map(c=>{
       if(c.pct) return `<td class="r num pctc g1" data-pct="1">—</td>`;
-      const v=c.v;
-      return `<td class="r num g1 ${v<0?"neg":""}">${v<0?"−":(signed&&v>0?"+":"")}${money(Math.abs(v))}</td>`;
+      const v = state.perUnit ? (ord ? c.v/ord : 0) : c.v;
+      const txt = state.perUnit ? `¥${Math.abs(v).toFixed(2)}` : money(Math.abs(v));
+      return `<td class="r num g1 ${v<0?"neg":""}">${v<0?"−":(signed&&v>0?"+":"")}${txt}</td>`;
     }).join("");
   }).join("");
 
   $("#groupBody").innerHTML = rows.map((a,ri)=>{
     const d=details[ri];
-    const html = cellsOf(d).replace('data-pct="1">—</td>', `data-pct="1">${pct(a.rev? a.profit/a.rev*100:0)}</td>`);
+    const html = cellsOf(d, a.orders).replace('data-pct="1">—</td>', `data-pct="1">${pct(a.rev? a.profit/a.rev*100:0)}</td>`);
     return `<tr><td><b>${a.name}</b></td><td class="r num" style="border-right:2px solid var(--line)">${a.orders.toLocaleString()}</td>${html}</tr>`;
   }).join("") + (()=>{
-    const html = cellsOf(totalD).replace('data-pct="1">—</td>', `data-pct="1">${pct(m.sum.rev? m.sum.profit/m.sum.rev*100:0)}</td>`);
+    const html = cellsOf(totalD, m.sum.orders).replace('data-pct="1">—</td>', `data-pct="1">${pct(m.sum.rev? m.sum.profit/m.sum.rev*100:0)}</td>`);
     return `<tr class="total"><td>合计</td><td class="r num" style="border-right:2px solid var(--line)">${m.sum.orders.toLocaleString()}</td>${html}</tr>`;
   })();
 }
@@ -2095,8 +2100,9 @@ function renderRiders(m){
     for(const g of DIM_CATS){
       const signed = g.l1 !== "收入";
       for(const [,key] of g.cols){
-        const v = d[key] || 0;
-        let txt = `${v<0?"−":(signed&&v>0?"+":"")}${money(Math.abs(v))}`;
+        const raw = d[key] || 0;
+        const v = state.perUnit ? (x.orders ? raw/x.orders : 0) : raw;
+        let txt = `${v<0?"−":(signed&&v>0?"+":"")}${state.perUnit ? "¥"+Math.abs(v).toFixed(2) : money(Math.abs(v))}`;
         let tip = "";
         if(key === "salary"){
           if(x.salaryRaw < 0)
@@ -2395,6 +2401,17 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#mapNew").value = "";
     flash(`已加入下拉：${label}`);
   };
+  const applyUnit = () => $$(".unitBtn").forEach(b => {
+    b.classList.toggle("on", state.perUnit);
+    b.textContent = state.perUnit ? "单均（元/单）· 开" : "单均（元/单）";
+  });
+  $$(".unitBtn").forEach(b => b.onclick = () => {
+    state.perUnit = !state.perUnit; applyUnit();
+    if(state.model){ renderGroups(state.model); renderRiders(state.model); }
+    flash(state.perUnit ? "已切到单均：所有金额 ÷ 单量" : "已恢复金额合计");
+  });
+  applyUnit();
+
   $("#byStation").checked = state.byStation;
   $("#byStation").onchange = e => { state.byStation = e.target.checked; if(state.model) run(); };
 
