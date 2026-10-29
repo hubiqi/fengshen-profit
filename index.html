@@ -1337,7 +1337,7 @@ function compute(period){
     return riders[key] || (riders[key] = { id, key, name:name||"", team:t, teamN:tn,
       station:st, stationN: st ? N(st) : "",
       gkey:g||"-", group:label||"-",
-      orders:0, rev:0, base:0, stren:0, ownBase:0, ownStren:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
+      orders:0, rev:0, base:0, stren:0, ownBase:0, ownStren:0, billRows:0, billAmt:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
   };
   // 账单行按「骑手ID + 团队」找人；团队名对不上时退到同片唯一那人，再退到单量最多的那行
   // 风神账单的一行可能对应骑手的多行（跨团队且团队名对不上）：返回 [行, 权重]
@@ -1481,6 +1481,7 @@ function compute(period){
           x.rev += (base + stren) * w;
           x.base += base * w; x.stren += stren * w;
           x.ownBase += base * w; x.ownStren += stren * w;
+          x.billRows += w; x.billAmt += amt * w;
         }
       }
       continue;
@@ -2133,6 +2134,7 @@ function renderRiders(m){
           const own = key === "base" ? (x.ownBase||0) : (x.ownStren||0);
           const share = raw - own;
           const parts = [`本人逐单流水：${money(Math.abs(own))}`];
+          if(x.billRows) parts.push(`逐单行数 ${Math.round(x.billRows)} 行 ｜ 账单金额合计 ${money(Math.abs(x.billAmt||0))}`);
           if(Math.abs(share) > 0.5) parts.push(`片内分摊（无骑手ID的配送收入）：${share<0?"−":"+"}${money(Math.abs(share))}`);
           if(!x.orders) parts.push(`本人本期单量为 0`);
           tip = ` title="${parts.join(" ｜ ")}"`;
@@ -2177,6 +2179,15 @@ function renderNotes(m){
   if(m.riders && m.riders.some(x => x.dim && x.group !== "-")) warn.push(`<li>骑手表与「商圈片」表<b>列完全一致</b>：收入 / 骑手成本 / 平台费 / 招聘 / 税赋 / 管理成本 → <b>净利 = 各列相加</b>。片里没落到具体骑手的收支按<b>单量占比</b>摊到人，逐列加总 = 片级数字，<b>骑手净利合计 = 整商净利</b>。</li>`);
   if(m.skipRider && m.skipRider.rows){
     warn.push(`<li class="warn">骑手账单里有 <b>${m.skipRider.rows}</b> 行<b>没有骑手ID</b>（${m.skipRider.list.map(esc).join("、")}${m.skipRider.rows>m.skipRider.list.length?"…":""}），薪资合计 <b>${money(Math.abs(m.skipRider.salary))}</b>、单量 ${Math.round(m.skipRider.orders).toLocaleString()}，已<b>整行跳过</b>——这类行通常是「合计/小计」行，或 ID 写法与主表不一致，计入会重复算一遍成本。</li>`);
+  }
+  const rowDiff = (m.riders||[]).filter(x => x.billRows && Math.abs(x.billRows - x.orders) > Math.max(2, x.orders * 0.01));
+  if(rowDiff.length){
+    warn.push(`<li class="warn"><b>${rowDiff.length}</b> 名骑手的「风神账单逐单行数」与骑手账单单量不一致（${rowDiff.slice(0,3).map(x=>esc(x.name||x.id)).join("、")}${rowDiff.length>3?"…":""}）——行数取自风神账单，单量取自骑手账单，两边口径本就可能不同（如跨账期、退单、补单）。</li>`);
+  }
+  const amtDiff = (m.riders||[]).filter(x => Math.abs((x.billAmt||0) - (x.ownBase + x.ownStren)) > 1);
+  if(amtDiff.length){
+    const gap = amtDiff.reduce((t,x)=>t + ((x.billAmt||0) - (x.ownBase + x.ownStren)), 0);
+    warn.push(`<li class="warn"><b>${amtDiff.length}</b> 名骑手的「金额」与「基础配送费 + 强度补贴」合计对不上，差额 <b>${money(Math.abs(gap))}</b>（${amtDiff.slice(0,3).map(x=>esc(x.name||x.id)).join("、")}${amtDiff.length>3?"…":""}）——工具的收入取的是<b>基础配送费 + 强度补贴</b>，不是「金额」列；若账单里部分行这两列是空的，就会比金额少。</li>`);
   }
   const revNoOrders = (m.riders||[]).filter(x => x.orders === 0 && Math.abs(x.rev||0) > 0.5);
   if(revNoOrders.length){
