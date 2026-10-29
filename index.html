@@ -1323,7 +1323,12 @@ function compute(period){
   const riders = {};   // riderId -> agg
   const riderG = {};   // riderId -> 商圈片（账单里没写站点的行，用骑手所属片回填）
   const riderGrpOrders = {};  // riderId -> { 片key: 单量 }（跨站骑手的个税按单量拆）
-  const mkR = (id,g,label,name) => riders[id] || (riders[id] = { id, name:name||"", gkey:g||"-", group:label||"-", orders:0, rev:0, base:0, stren:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
+  // 一人一片一行：同一骑手跨片跑单时拆成两行，避免他的薪资/预支被算到另一个片再摊给别人
+  const mkR = (id,g,label,name) => {
+    const key = id + "|" + (g || "-");
+    return riders[key] || (riders[key] = { id, key, name:name||"", gkey:g||"-", group:label||"-",
+      orders:0, rev:0, base:0, stren:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
+  };
   let unassignedRows = 0, unassignedAmt = 0, billOrders = 0;
   const unassignedList = [];
   const other = { orders:0, rev:0, kpi:0, adj:0, guar:0, appeal:0, ins:0, viol:0, fee:0, collect:0, recruit:0 };
@@ -1363,27 +1368,26 @@ function compute(period){
   }
 
   // ---- 薪资合计为负的骑手（扣款超过跑单收入）扣不回来，按 0 计 ----
-  for(const [id,x] of Object.entries(riders)){
+  for(const x of Object.values(riders)){
     if(x.salary >= 0) continue;
     const adj = -x.salary;
     x.salaryRaw = x.salary;   // 账单原值（负数），界面上灰色划掉、计算仍按 0
     x.salary = 0;
-    const m = riderGrpOrders[id] || {};
-    const tot = Object.values(m).reduce((s,v)=>s+v,0);
-    if(tot){
-      for(const [gk,o] of Object.entries(m)){ const a = G[gk]; if(a) a.cost.salary += adj * (o/tot); }
-    } else { const a = G[x.gkey]; if(a) a.cost.salary += adj; }
+    const a = G[x.gkey]; if(a) a.cost.salary += adj;
   }
 
   // ---- 骑手代付（个税）：Σ max(0, (骑手月薪 × 80% − 5000) × 3%)，按人算、按单量拆回片 ----
-  for(const [id,x] of Object.entries(riders)){
-    const t = Math.max(0, (x.salary*0.8 - 5000) * 0.03);
-    x.pay = t;
-    const m = riderGrpOrders[id] || {};
-    const tot = Object.values(m).reduce((s,v)=>s+v,0);
-    if(tot){
-      for(const [gk,o] of Object.entries(m)){ const a = G[gk]; if(a) a.cost.pay += t * (o/tot); }
-    } else { const a = G[x.gkey]; if(a) a.cost.pay += t; }
+  const personRows = {};
+  for(const x of Object.values(riders)) (personRows[x.id] || (personRows[x.id] = [])).push(x);
+  for(const [pid, rows] of Object.entries(personRows)){
+    const tot = rows.reduce((t,x)=>t + x.salary, 0);
+    const tax = Math.max(0, (tot*0.8 - 5000) * 0.03);
+    const sumO = rows.reduce((t,x)=>t + x.orders, 0);
+    for(const x of rows){
+      const w = sumO ? x.orders/sumO : 1/rows.length;
+      x.pay = tax * w;
+      const a = G[x.gkey]; if(a) a.cost.pay += x.pay;
+    }
   }
 
   // ---- 风神账单 ----
@@ -2047,7 +2051,8 @@ function renderRiders(m){
     return (val(x,k) - val(y,k)) * dir;
   });
   const show = list.slice(0, state.riderLimit);
-  $("#riderCount").textContent = list.length.toLocaleString() + " 人";
+  const _ids = new Set(list.map(x=>String(x.id)));
+  $("#riderCount").textContent = _ids.size.toLocaleString() + " 人" + (_ids.size === list.length ? "" : ` · ${list.length} 行（跨片骑手按片拆行）`);
   const _f = v => (v<0?"−":"")+money(Math.abs(v));
   const _gross = list.reduce((t,x)=>t + x.gross, 0), _net = list.reduce((t,x)=>t + x.net, 0);
   $("#riderHint").textContent = `配送毛利 ${_f(_gross)} · 净利 ${_f(_net)}（=整商净利）· 人均净利 ${_f(list.length? _net/list.length : 0)} · 列与「商圈片」完全一致，逐列加总 = 片级`;
@@ -2196,7 +2201,11 @@ async function loadDemo(){
   try{
     // 先清空
     state.files = {}; state.model = null; state.periods = []; state.period = "";
-    try{ const all = await dbGetAll(); for(const [k] of all) await dbDel(k); }catch(e){}
+    // 清本机缓存，但最多等 1.5s（IndexedDB 在部分 WebView 里会卡住，不能阻塞示例数据）
+    try{
+      const wipe = (async () => { const all = await dbGetAll(); for(const [k] of all) await dbDel(k); })();
+      await Promise.race([wipe, new Promise(r=>setTimeout(r,1500))]);
+    }catch(e){}
     SLOTS.forEach(s => {
       const fl = $(`#fl-${s.id}`); if(fl) fl.innerHTML = "";
       const ok = $(`#ok-${s.id}`); if(ok) ok.textContent = "";
