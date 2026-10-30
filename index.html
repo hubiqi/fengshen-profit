@@ -1358,6 +1358,8 @@ function compute(period){
     const key = id + "|" + (tn || sn || g || "-");
     if(riders[key]) return [[riders[key], 1]];
     const same = Object.values(riders).filter(x => x.id === id);
+    // 账单里的团队他确实有（只是这个团队下没他的薪资行）：单开一行，钱归这个团队，不摊给别人
+    if(same.length && tn && knownTeams.has(tn)) return [[mkR(id, g, label, name, t, ""), 1]];
     if(same.length === 1) return [[same[0], 1]];
     if(same.length){
       if(tn){ const m = same.find(x => x.teamN === tn || x.stationN === tn); if(m) return [[m, 1]]; }
@@ -1431,9 +1433,12 @@ function compute(period){
   }
 
   // 学会「站点名/团队名 → 团队ID」，供风神账单匹配用（团队ID + 骑手ID 才是唯一键）
+  const knownTeams = new Set();
   for(const x of Object.values(riders)){
     if(x.teamN && x.stationN && !teamIdByStation[x.stationN]) teamIdByStation[x.stationN] = x.teamN;
     if(x.teamN && !teamIdByStation[x.teamN]) teamIdByStation[x.teamN] = x.teamN;
+    if(x.teamN) knownTeams.add(x.teamN);
+    if(x.stationN) knownTeams.add(x.stationN);
   }
 
   // ---- 薪资合计为负的骑手（扣款超过跑单收入）扣不回来，按 0 计 ----
