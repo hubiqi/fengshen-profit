@@ -1908,6 +1908,11 @@ function renderLines(m){
   body += groupByL1(exp).map(g => g.items.map(x=>row(x[0],x[1],x[2],x[3],true,x[4])).join("") + (g.items.length>1?sub(g.l1,g.sum):"")).join("");
   const totalExp = s.rev - s.profit;
   body += `<tr class="total"><td class="l1">支出</td><td>支出合计</td>${cell(-Math.abs(totalExp),true)}<td></td></tr>`;
+  // ★ 2026-10-31（用户要求）：所有维度都要有毛利 + 净利
+  body += `<tr class="total"><td class="l1">毛利</td><td>配送毛利（收入 − 骑手成本）</td>
+      <td class="r num ${s.gross<0?"neg":"pos"}">${s.gross<0?"−":""}${money(Math.abs(s.gross))}</td>
+      <td class="r num">${num2(s.perGross)}</td>
+      <td class="r num">${pct(s.rev? s.gross/s.rev*100:0)}</td><td></td></tr>`;
   body += `<tr class="total"><td class="l1">净利</td><td>净利</td>
       <td class="r num ${s.profit<0?"neg":"pos"}">${s.profit<0?"−":""}${money(Math.abs(s.profit))}</td>
       <td class="r num">${num2(s.perProfit)}</td>
@@ -1963,6 +1968,8 @@ function groupDetail(a){
   return [
     { l1:"收入", cols:[R("基础配送费",d.base),R("强度补贴",d.stren),R("KPI 考核",d.kpi),R("调整账",d.adj),R("配送保障补贴",d.guar),R("申诉返款",d.appeal)] },
     { l1:"骑手成本", cols:[E("骑手薪资（平台代发）",-c.salary),E("骑手预支（我方垫付）",-c.adv),E("骑手代付（个税）",-c.pay)] },
+    // ★ 2026-10-31（用户要求）：所有维度的结果列都要有【毛利】和【净利】
+    { l1:"毛利", cols:[{ n:"毛利", v:a.gross }] },
     { l1:"平台费", cols:[E("保险",c.ins),E("违规扣款",c.viol),E("服务费",c.fee),E("代收代付",c.collect)] },
     { l1:"招聘", cols:[E("招聘服务费",c.recruit)] },
     { l1:"税赋", cols:[E("税赋",a.tax)] },
@@ -2123,12 +2130,14 @@ function exportGroupsCsv(){
 const DIM_CATS = [
   { l1:"收入", cols:[["基础配送费","base"],["强度补贴","stren"],["KPI 考核","kpi"],["调整账","adj"],["配送保障补贴","guar"],["申诉返款","appeal"]] },
   { l1:"骑手成本", cols:[["骑手薪资（平台代发）","salary"],["骑手预支（我方垫付）","adv"],["骑手代付（个税）","pay"]] },
+  // ★ 2026-10-31（用户要求）：结果列要有毛利 + 净利
+  { l1:"毛利", cols:[["毛利","gross"]] },
   { l1:"平台费", cols:[["保险","ins"],["违规扣款","viol"],["服务费","fee"],["代收代付","collect"]] },
   { l1:"招聘", cols:[["招聘服务费","recruit"]] },
   { l1:"税赋", cols:[["税赋","tax"]] },
   { l1:"管理成本", cols:[["站点管理工资","wage"],["站点支出","reimb"],["城市分摊","alloc"]] }
 ];
-const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length, 0) + 2;   // + 净利 + 净利率
+const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length, 0) + 2;   // + 净利 + 净利率（毛利已进 DIM_CATS）
 let _riderHeadBuilt = false;
 function buildRiderHead(){
   if(_riderHeadBuilt) return;
@@ -2137,7 +2146,8 @@ function buildRiderHead(){
   el.innerHTML =
     `<tr><th rowspan="2" class="s" data-k="name">骑手</th><th rowspan="2">团队</th><th rowspan="2">商圈片</th>` +
     `<th rowspan="2" class="r s" data-k="orders" style="border-right:2px solid var(--line)">单量</th>` +
-    DIM_CATS.map(g=>`<th colspan="${g.cols.length}" class="g1" style="text-align:center">${g.l1}</th>`).join("") +
+    DIM_CATS.map(g=>`<th colspan="${g.cols.length}" class="g1" style="text-align:center"` +
+      (g.l1==="骑手成本" ? ` data-hdr="cost"` : "") + `>${g.l1}</th>`).join("") +
     `<th colspan="2" class="g1" style="text-align:center">结果</th></tr><tr>` +
     DIM_CATS.map(g=>g.cols.map(([n,k])=>`<th class="r s g1" data-k="${k}">${n}</th>`).join("")).join("") +
     `<th class="r s g1" data-k="net">净利</th><th class="r s" data-k="rate">净利率</th></tr>`;
@@ -2163,13 +2173,20 @@ function renderRiders(m){
   const _f = v => (v<0?"−":"")+money(Math.abs(v));
   const _gross = list.reduce((t,x)=>t + x.gross, 0), _net = list.reduce((t,x)=>t + x.net, 0);
   $("#riderHint").textContent = `配送毛利 ${_f(_gross)} · 净利 ${_f(_net)}（=整商净利）· 人均净利 ${_f(list.length? _net/list.length : 0)} · 列与「商圈片」完全一致，逐列加总 = 片级`;
+  // ★ 2026-10-31（用户要求）：骑手成本表头加汇总
+  const _hc = document.querySelector('#riderHead th[data-hdr="cost"]');
+  if(_hc){
+    const _cs = list.reduce((t,x)=>t + (x.dim? (x.dim.salary||0)+(x.dim.adv||0)+(x.dim.pay||0) : 0), 0);
+    _hc.innerHTML = `骑手成本 <span style="font-weight:400;color:var(--muted)">Σ ${_f(_cs)}</span>`;
+  }
   const cells = x => {
     const d = x.dim || {};
     let html = "";
     for(const g of DIM_CATS){
       const signed = g.l1 !== "收入";
       for(const [,key] of g.cols){
-        const raw = d[key] || 0;
+        // ★ gross 等在骑手对象顶层，不在 dim 里
+        const raw = (x[key] !== undefined && typeof x[key] === "number") ? x[key] : (d[key] || 0);
         const v = state.perUnit ? (x.orders ? raw/x.orders : 0) : raw;
         let txt = `${v<0?"−":(signed&&v>0?"+":"")}${state.perUnit ? "¥"+Math.abs(v).toFixed(2) : money(Math.abs(v))}`;
         let tip = "";
@@ -2195,7 +2212,9 @@ function renderRiders(m){
         html += `<td class="r num g1 ${v<0?"neg":""}"${tip}>${txt}</td>`;
       }
     }
-    html += `<td class="r num g1 ${x.net<0?"neg":"pos"}">${x.net<0?"−":""}${money(Math.abs(x.net))}</td>`;
+    // ★ 2026-10-31：净利列原来没接 perUnit → 「净利单均」点了不动，就是这里
+    const nv = state.perUnit ? (x.orders ? x.net/x.orders : 0) : x.net;
+    html += `<td class="r num g1 ${nv<0?"neg":"pos"}">${state.perUnit ? "¥" : ""}${nv<0?"−":""}${state.perUnit ? Math.abs(nv).toFixed(2) : money(Math.abs(nv))}</td>`;
     html += `<td class="r num ${x.rate<0?"neg":""}">${pct(x.rate||0)}</td>`;
     return html;
   };
