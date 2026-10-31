@@ -265,6 +265,7 @@
         <div class="sub">最小核算单元（片/圈）。表头为一级分类 + 二级科目；公司级管理工资与报销按完单占比分摊。表格较宽，可左右滚动 →</div>
         <div class="toolbar">
           <label class="chk"><input type="checkbox" id="l3Group"> 显示三级分类</label>
+          <label class="chk" title="勾上＝负薪资保留账单原值（与源表一致）；不勾＝按 0 计（不冲利润）"><input type="checkbox" id="keepNeg"> 负薪资按原值</label>
           <button class="ghost unitBtn" id="groupUnit">单均（元/单）</button>
           <div class="spacer"></div><button class="ghost" id="groupCsvBtn">导出商圈片明细 CSV</button>
         </div>
@@ -634,7 +635,7 @@ const SLOTS = [
     sheet:["kpi","绩效达成明细"] }
 ];
 
-const state = { files:{}, periods:[], model:null, period:null, tab:"all", riderSort:{k:"gross",dir:-1}, riderLimit:200, riderQ:"", byStation:true, busy:false, showL3:false, perUnit:false };
+const state = { files:{}, periods:[], model:null, period:null, tab:"all", riderSort:{k:"gross",dir:-1}, riderLimit:200, riderQ:"", byStation:true, busy:false, showL3:false, perUnit:false, keepNegSalary:false };
 
 /* ================= 管理工资 / 报销 模板 ================= */
 const TEMPLATES = {
@@ -1304,11 +1305,17 @@ function compute(period){
     const manual = team && SM.manualKeys.indexOf(N(team)) >= 0;   // 手工映射对账单同样生效
     let raw = manual ? SM.map[N(team)] : "";
     if(!raw && bm.cat !== undefined) raw = String(row[bm.cat] ?? "").trim();
-    if((!raw || raw === "-") && bm.rid !== undefined){
-      const rid = normId(row[bm.rid]);
-      if(rid && riderG[rid]) raw = riderG[rid];     // 没有站点但能识别到骑手 → 用骑手所属片
-    }
+    // ★★★ 2026-10-31 修复（用户指出，账单在片与片之间搬钱的主因）：
+    //   原来「骑手所属片 riderG[rid]」排在【行自己的团队】之前，
+    //   而 riderG 是循环里最后一条覆盖前一条 —— 一个骑手只保留一个片。
+    //   于是跨站点骑手的账单收入被整月归到"最后一条薪资记录"的站点，
+    //   行自己的「团队名称」完全失效（实测搬了 1.2 万）。
+    //   现在：行自己的团队/站点优先，riderG 只在【连团队都没有】时兜底。
     if((!raw || raw === "-") && team && SM.map[N(team)]) raw = SM.map[N(team)];
+    if((!raw || raw === "-") && (!team || team === "-") && bm.rid !== undefined){
+      const rid = normId(row[bm.rid]);
+      if(rid && riderG[rid]) raw = riderG[rid];
+    }
     return pick(raw, team);
   };
 
@@ -1444,8 +1451,11 @@ function compute(period){
   // ---- 薪资合计为负的骑手（扣款超过跑单收入）扣不回来，按 0 计 ----
   for(const x of Object.values(riders)){
     if(x.salary >= 0) continue;
+    x.salaryRaw = x.salary;   // 账单原值（负数）
+    // ★ 2026-10-31（用户建议）：负薪资是否清零做成开关。
+    //   清零 = 不冲利润（旧口径）；保留原值 = 与源表一致（片区成本会低 6,206.70）。
+    if(state.keepNegSalary) continue;
     const adj = -x.salary;
-    x.salaryRaw = x.salary;   // 账单原值（负数），界面上灰色划掉、计算仍按 0
     x.salary = 0;
     const a = G[x.gkey]; if(a) a.cost.salary += adj;
   }
@@ -2530,6 +2540,14 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#l3All").checked = state.showL3; $("#l3Group").checked = state.showL3;
     if(state.model){ renderLines(state.model); renderGroups(state.model); }
   };
+  const keepNegEl = $("#keepNeg");
+  if(keepNegEl){
+    keepNegEl.checked = !!state.keepNegSalary;
+    keepNegEl.onchange = e => {
+      state.keepNegSalary = e.target.checked;
+      if(state.period){ state.model = compute(state.period); render(); }
+    };
+  }
   $("#l3All").onchange = e => setL3(e.target.checked);
   $("#l3Group").onchange = e => setL3(e.target.checked);
   setL3(false);
