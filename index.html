@@ -265,7 +265,6 @@
         <div class="sub">最小核算单元（片/圈）。表头为一级分类 + 二级科目；公司级管理工资与报销按完单占比分摊。表格较宽，可左右滚动 →</div>
         <div class="toolbar">
           <label class="chk"><input type="checkbox" id="l3Group"> 显示三级分类</label>
-          <label class="chk" title="勾上＝负薪资保留账单原值（与源表一致）；不勾＝按 0 计（不冲利润）"><input type="checkbox" id="keepNeg"> 负薪资按原值</label>
           <button class="ghost unitBtn" id="groupUnit">单均（元/单）</button>
           <div class="spacer"></div><button class="ghost" id="groupCsvBtn">导出商圈片明细 CSV</button>
         </div>
@@ -313,7 +312,7 @@
     <button class="close" id="maskClose">×</button>
     <h3>核算口径</h3>
     <p><b>1. 毛收入（还原法）</b>：取《风神账单》中 <code>业务类型=配送收入</code> 的<b>基础配送费 + 强度补贴</b>，加上 KPI、调整账、配送保障补贴、申诉返款。<b>不使用「配送费支付调整」</b>——那笔钱等于平台代发的骑手工资，已在支出侧按薪资全额记一次，再记会重复。</p>
-    <p><b>2. 骑手成本</b>：<code>Σmax(0, 薪资合计) + 自定义发薪(预支) + 骑手代付个税</code>。预支是我们垫付的现金（源表无论写正数还是负数，一律按<b>绝对值</b>计入成本），薪资合计是平台代发的部分，两者相加才是骑手全月所得；个税按 <code>Σ max(0, (骑手月薪×80% − 5000) × 3%)</code> 逐人计算（不足 5000 不计，负数不冲抵）。</p>
+    <p><b>2. 骑手成本</b>：<code>Σmax(0, 薪资合计) + 自定义发薪(预支) + 骑手代付个税</code>。预支是我们垫付的现金（源表无论写正数还是负数，一律按<b>绝对值</b>计入成本），薪资合计是平台代发的部分，两者相加才是骑手全月所得；个税按 <b>骑手账单里的「个税扣款」列逐行求和</b>（退款为负自动冲减）；该列不存在时才回退到 <code>Σ max(0, (总收入×80% − 5000) × 3%)</code>，总收入 = 计税收入（有该列时取它）= 薪资合计 + |预支|。</p>
     <p><b>3. 平台费</b>：日结配送费扣款（保险）、违规扣款（索赔/抽检/轩辕）、服务费（隐私/信息/安全画像，<b>剔除人力资源招聘服务费</b>）、代收代付（智能柜/个税/暖心餐）。</p>
     <p><b>4. 招聘</b>：取《风神账单》中 <code>服务费 / 人力资源招聘服务费</code>，单列不并入服务费。</p>
     <p><b>5. 税赋</b>：<code>5.3% × (预支 + 薪资) + 6.72% × MAX(0, 毛收入 − 骑手成本 − 平台费)</code>。前者是灵工服务费，后者是差额征税。</p>
@@ -607,7 +606,7 @@ const SLOTS = [
           ["salary",["薪资合计","应发薪资","薪资总额"]],
           ["adv",["自定义发薪(预支)","预支","预支金额"]],
           ["prepay",["自定义发薪(提前发薪)","提前发薪"]],
-          ["tax",["个税扣款"]],["water",["水电费"]],
+          ["taxbase",["计税收入"]],["tax",["个税扣款"]],["water",["水电费"]],
           ["equip",["装备物资"]],["dorm",["住宿费用"]],["car",["车辆租金"]],
           ["station",["骑手所属站点名称","所属站点名称","站点名称","骑手所属站点","所属站点"]],
           ["team",["骑手所属站点id","所属站点id","站点id","站点编码","团队id","团队编号","团队编码","团队","团队名称","站点编号"]]],
@@ -635,7 +634,7 @@ const SLOTS = [
     sheet:["kpi","绩效达成明细"] }
 ];
 
-const state = { files:{}, periods:[], model:null, period:null, tab:"all", riderSort:{k:"gross",dir:-1}, riderLimit:200, riderQ:"", byStation:true, busy:false, showL3:false, perUnit:false, keepNegSalary:false };
+const state = { files:{}, periods:[], model:null, period:null, tab:"all", riderSort:{k:"gross",dir:-1}, riderLimit:200, riderQ:"", byStation:true, busy:false, showL3:false, perUnit:false };
 
 /* ================= 管理工资 / 报销 模板 ================= */
 const TEMPLATES = {
@@ -1305,17 +1304,11 @@ function compute(period){
     const manual = team && SM.manualKeys.indexOf(N(team)) >= 0;   // 手工映射对账单同样生效
     let raw = manual ? SM.map[N(team)] : "";
     if(!raw && bm.cat !== undefined) raw = String(row[bm.cat] ?? "").trim();
-    // ★★★ 2026-10-31 修复（用户指出，账单在片与片之间搬钱的主因）：
-    //   原来「骑手所属片 riderG[rid]」排在【行自己的团队】之前，
-    //   而 riderG 是循环里最后一条覆盖前一条 —— 一个骑手只保留一个片。
-    //   于是跨站点骑手的账单收入被整月归到"最后一条薪资记录"的站点，
-    //   行自己的「团队名称」完全失效（实测搬了 1.2 万）。
-    //   现在：行自己的团队/站点优先，riderG 只在【连团队都没有】时兜底。
-    if((!raw || raw === "-") && team && SM.map[N(team)]) raw = SM.map[N(team)];
-    if((!raw || raw === "-") && (!team || team === "-") && bm.rid !== undefined){
+    if((!raw || raw === "-") && bm.rid !== undefined){
       const rid = normId(row[bm.rid]);
-      if(rid && riderG[rid]) raw = riderG[rid];
+      if(rid && riderG[rid]) raw = riderG[rid];     // 没有站点但能识别到骑手 → 用骑手所属片
     }
+    if((!raw || raw === "-") && team && SM.map[N(team)]) raw = SM.map[N(team)];
     return pick(raw, team);
   };
 
@@ -1432,6 +1425,8 @@ function compute(period){
                     rm.team !== undefined ? r[rm.team] : "",
                     rm.station !== undefined ? r[rm.station] : "");
       x.orders += o; x.salary += sal; x.adv += adv;
+      x.taxBase = (x.taxBase || 0) + (rm.taxbase !== undefined ? num(r[rm.taxbase]) : 0);
+      if(rm.tax !== undefined) x.payRaw = (x.payRaw || 0) + num(r[rm.tax]);
       (x.gsal || (x.gsal = {}))[g] = ((x.gsal[g]) || 0) + sal;
       (x.gadv || (x.gadv = {}))[g] = ((x.gadv[g]) || 0) + adv;
       riderG[id] = g;
@@ -1451,11 +1446,8 @@ function compute(period){
   // ---- 薪资合计为负的骑手（扣款超过跑单收入）扣不回来，按 0 计 ----
   for(const x of Object.values(riders)){
     if(x.salary >= 0) continue;
-    x.salaryRaw = x.salary;   // 账单原值（负数）
-    // ★ 2026-10-31（用户建议）：负薪资是否清零做成开关。
-    //   清零 = 不冲利润（旧口径）；保留原值 = 与源表一致（片区成本会低 6,206.70）。
-    if(state.keepNegSalary) continue;
     const adj = -x.salary;
+    x.salaryRaw = x.salary;   // 账单原值（负数），界面上灰色划掉、计算仍按 0
     x.salary = 0;
     const a = G[x.gkey]; if(a) a.cost.salary += adj;
   }
@@ -1463,14 +1455,28 @@ function compute(period){
   // ---- 骑手代付（个税）：Σ max(0, (骑手月薪 × 80% − 5000) × 3%)，按人算、按单量拆回片 ----
   const personRows = {};
   for(const x of Object.values(riders)) (personRows[x.id] || (personRows[x.id] = [])).push(x);
-  for(const [pid, rows] of Object.entries(personRows)){
-    const tot = rows.reduce((t,x)=>t + x.salary, 0);
-    const tax = Math.max(0, (tot*0.8 - 5000) * 0.03);
-    const sumO = rows.reduce((t,x)=>t + x.orders, 0);
-    for(const x of rows){
-      const w = sumO ? x.orders/sumO : 1/rows.length;
-      x.pay = tax * w;
+  if(rm.tax !== undefined){
+    // 个税直接取骑手账单的「个税扣款」列合计（退款为负会自动冲减）
+    for(const x of Object.values(riders)){
+      x.pay = x.payRaw || 0;
       const a = G[x.gkey]; if(a) a.cost.pay += x.pay;
+    }
+  } else {
+    // 账单里没有个税列时才估算：总收入 = 计税收入（有该列时）或 薪资 + |预支|
+    for(const [pid, rows] of Object.entries(personRows)){
+      const tot = rows.reduce((t,x)=>{
+        const base = (rm.taxbase !== undefined && x.taxBase !== undefined && x.taxBase !== null && x.taxBase !== 0)
+          ? x.taxBase
+          : ((x.salary||0) + Math.abs(x.adv||0));
+        return t + Math.max(0, base);
+      }, 0);
+      const tax = Math.max(0, (tot*0.8 - 5000) * 0.03);
+      const sumO = rows.reduce((t,x)=>t + x.orders, 0);
+      for(const x of rows){
+        const w = sumO ? x.orders/sumO : 1/rows.length;
+        x.pay = tax * w;
+        const a = G[x.gkey]; if(a) a.cost.pay += x.pay;
+      }
     }
   }
 
@@ -1848,7 +1854,7 @@ function lineData(m){
   const exp=[
     ["骑手成本","骑手薪资（平台代发）",-s.salary,"骑手账单·薪资合计（负值按 0 计，扣不回来）",""],
     ["骑手成本","骑手预支（我方垫付）",-s.adv,"骑手账单·自定义发薪(预支)（按绝对值计入，源表正负都行）",""],
-    ["骑手成本","骑手代付（个税）",-s.pay,"Σ max(0, (月薪×80% − 5000) × 3%)，我们承担",""],
+    ["骑手成本","骑手代付（个税）",-s.pay,"骑手账单「个税扣款」列求和（无该列时按 3% 估算）",""],
     ["平台费","保险",s.ins,"日结配送费扣款·按险种拆分","ins"],
     ["平台费","违规扣款",s.viol,"索赔 / 抽检 / 轩辕罚单","viol"],
     ["平台费","服务费",s.fee,"隐私+信息+安全画像（不含招聘）","fee"],
@@ -1908,11 +1914,6 @@ function renderLines(m){
   body += groupByL1(exp).map(g => g.items.map(x=>row(x[0],x[1],x[2],x[3],true,x[4])).join("") + (g.items.length>1?sub(g.l1,g.sum):"")).join("");
   const totalExp = s.rev - s.profit;
   body += `<tr class="total"><td class="l1">支出</td><td>支出合计</td>${cell(-Math.abs(totalExp),true)}<td></td></tr>`;
-  // ★ 2026-10-31（用户要求）：所有维度都要有毛利 + 净利
-  body += `<tr class="total"><td class="l1">毛利</td><td>配送毛利（收入 − 骑手成本）</td>
-      <td class="r num ${s.gross<0?"neg":"pos"}">${s.gross<0?"−":""}${money(Math.abs(s.gross))}</td>
-      <td class="r num">${num2(s.perGross)}</td>
-      <td class="r num">${pct(s.rev? s.gross/s.rev*100:0)}</td><td></td></tr>`;
   body += `<tr class="total"><td class="l1">净利</td><td>净利</td>
       <td class="r num ${s.profit<0?"neg":"pos"}">${s.profit<0?"−":""}${money(Math.abs(s.profit))}</td>
       <td class="r num">${num2(s.perProfit)}</td>
@@ -1968,8 +1969,6 @@ function groupDetail(a){
   return [
     { l1:"收入", cols:[R("基础配送费",d.base),R("强度补贴",d.stren),R("KPI 考核",d.kpi),R("调整账",d.adj),R("配送保障补贴",d.guar),R("申诉返款",d.appeal)] },
     { l1:"骑手成本", cols:[E("骑手薪资（平台代发）",-c.salary),E("骑手预支（我方垫付）",-c.adv),E("骑手代付（个税）",-c.pay)] },
-    // ★ 2026-10-31（用户要求）：所有维度的结果列都要有【毛利】和【净利】
-    { l1:"毛利", cols:[{ n:"毛利", v:a.gross }] },
     { l1:"平台费", cols:[E("保险",c.ins),E("违规扣款",c.viol),E("服务费",c.fee),E("代收代付",c.collect)] },
     { l1:"招聘", cols:[E("招聘服务费",c.recruit)] },
     { l1:"税赋", cols:[E("税赋",a.tax)] },
@@ -2130,14 +2129,12 @@ function exportGroupsCsv(){
 const DIM_CATS = [
   { l1:"收入", cols:[["基础配送费","base"],["强度补贴","stren"],["KPI 考核","kpi"],["调整账","adj"],["配送保障补贴","guar"],["申诉返款","appeal"]] },
   { l1:"骑手成本", cols:[["骑手薪资（平台代发）","salary"],["骑手预支（我方垫付）","adv"],["骑手代付（个税）","pay"]] },
-  // ★ 2026-10-31（用户要求）：结果列要有毛利 + 净利
-  { l1:"毛利", cols:[["毛利","gross"]] },
   { l1:"平台费", cols:[["保险","ins"],["违规扣款","viol"],["服务费","fee"],["代收代付","collect"]] },
   { l1:"招聘", cols:[["招聘服务费","recruit"]] },
   { l1:"税赋", cols:[["税赋","tax"]] },
   { l1:"管理成本", cols:[["站点管理工资","wage"],["站点支出","reimb"],["城市分摊","alloc"]] }
 ];
-const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length, 0) + 2;   // + 净利 + 净利率（毛利已进 DIM_CATS）
+const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length, 0) + 2;   // + 净利 + 净利率
 let _riderHeadBuilt = false;
 function buildRiderHead(){
   if(_riderHeadBuilt) return;
@@ -2146,8 +2143,7 @@ function buildRiderHead(){
   el.innerHTML =
     `<tr><th rowspan="2" class="s" data-k="name">骑手</th><th rowspan="2">团队</th><th rowspan="2">商圈片</th>` +
     `<th rowspan="2" class="r s" data-k="orders" style="border-right:2px solid var(--line)">单量</th>` +
-    DIM_CATS.map(g=>`<th colspan="${g.cols.length}" class="g1" style="text-align:center"` +
-      (g.l1==="骑手成本" ? ` data-hdr="cost"` : "") + `>${g.l1}</th>`).join("") +
+    DIM_CATS.map(g=>`<th colspan="${g.cols.length}" class="g1" style="text-align:center">${g.l1}</th>`).join("") +
     `<th colspan="2" class="g1" style="text-align:center">结果</th></tr><tr>` +
     DIM_CATS.map(g=>g.cols.map(([n,k])=>`<th class="r s g1" data-k="${k}">${n}</th>`).join("")).join("") +
     `<th class="r s g1" data-k="net">净利</th><th class="r s" data-k="rate">净利率</th></tr>`;
@@ -2173,20 +2169,13 @@ function renderRiders(m){
   const _f = v => (v<0?"−":"")+money(Math.abs(v));
   const _gross = list.reduce((t,x)=>t + x.gross, 0), _net = list.reduce((t,x)=>t + x.net, 0);
   $("#riderHint").textContent = `配送毛利 ${_f(_gross)} · 净利 ${_f(_net)}（=整商净利）· 人均净利 ${_f(list.length? _net/list.length : 0)} · 列与「商圈片」完全一致，逐列加总 = 片级`;
-  // ★ 2026-10-31（用户要求）：骑手成本表头加汇总
-  const _hc = document.querySelector('#riderHead th[data-hdr="cost"]');
-  if(_hc){
-    const _cs = list.reduce((t,x)=>t + (x.dim? (x.dim.salary||0)+(x.dim.adv||0)+(x.dim.pay||0) : 0), 0);
-    _hc.innerHTML = `骑手成本 <span style="font-weight:400;color:var(--muted)">Σ ${_f(_cs)}</span>`;
-  }
   const cells = x => {
     const d = x.dim || {};
     let html = "";
     for(const g of DIM_CATS){
       const signed = g.l1 !== "收入";
       for(const [,key] of g.cols){
-        // ★ gross 等在骑手对象顶层，不在 dim 里
-        const raw = (x[key] !== undefined && typeof x[key] === "number") ? x[key] : (d[key] || 0);
+        const raw = d[key] || 0;
         const v = state.perUnit ? (x.orders ? raw/x.orders : 0) : raw;
         let txt = `${v<0?"−":(signed&&v>0?"+":"")}${state.perUnit ? "¥"+Math.abs(v).toFixed(2) : money(Math.abs(v))}`;
         let tip = "";
@@ -2212,9 +2201,7 @@ function renderRiders(m){
         html += `<td class="r num g1 ${v<0?"neg":""}"${tip}>${txt}</td>`;
       }
     }
-    // ★ 2026-10-31：净利列原来没接 perUnit → 「净利单均」点了不动，就是这里
-    const nv = state.perUnit ? (x.orders ? x.net/x.orders : 0) : x.net;
-    html += `<td class="r num g1 ${nv<0?"neg":"pos"}">${state.perUnit ? "¥" : ""}${nv<0?"−":""}${state.perUnit ? Math.abs(nv).toFixed(2) : money(Math.abs(nv))}</td>`;
+    html += `<td class="r num g1 ${x.net<0?"neg":"pos"}">${x.net<0?"−":""}${money(Math.abs(x.net))}</td>`;
     html += `<td class="r num ${x.rate<0?"neg":""}">${pct(x.rate||0)}</td>`;
     return html;
   };
@@ -2559,14 +2546,6 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#l3All").checked = state.showL3; $("#l3Group").checked = state.showL3;
     if(state.model){ renderLines(state.model); renderGroups(state.model); }
   };
-  const keepNegEl = $("#keepNeg");
-  if(keepNegEl){
-    keepNegEl.checked = !!state.keepNegSalary;
-    keepNegEl.onchange = e => {
-      state.keepNegSalary = e.target.checked;
-      if(state.period){ state.model = compute(state.period); render(); }
-    };
-  }
   $("#l3All").onchange = e => setL3(e.target.checked);
   $("#l3Group").onchange = e => setL3(e.target.checked);
   setL3(false);
