@@ -1346,7 +1346,7 @@ function compute(period){
     return riders[key] || (riders[key] = { id, key, name:name||"", team:t, teamN:tn,
       station:st, stationN: st ? N(st) : "",
       gkey:g||"-", group:label||"-",
-      orders:0, rev:0, base:0, stren:0, ownBase:0, ownStren:0, billRows:0, billAmt:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
+      orders:0, rev:0, base:0, stren:0, kpi:0, adj:0, guar:0, appeal:0, ownBase:0, ownStren:0, billRows:0, billAmt:0, salary:0, adv:0, pay:0, ins:0, viol:0, alloc:0 });
   };
   // 账单行按「骑手ID + 团队」找人；团队名对不上时退到同片唯一那人，再退到单量最多的那行
   // 风神账单的一行可能对应骑手的多行（跨团队且团队名对不上）：返回 [行, 权重]
@@ -1494,6 +1494,11 @@ function compute(period){
     const stren = bm.stren!==undefined ? num(r[bm.stren]) : 0;
     const rid = bm.rid!==undefined ? normId(r[bm.rid]) : "";
     const rname = bm.rname!==undefined ? String(r[bm.rname]??"").trim() : "";
+    const billTeam = bm.teamid !== undefined ? r[bm.teamid]
+                   : (bm.team !== undefined ? r[bm.team] : "");
+    const dt = bm.detail!==undefined ? String(r[bm.detail]??"").trim() : "";
+    const riderPairs = rid ? riderRowsFor(rid, g, gg.label, rname, billTeam, "") : null;
+    if(rid && String(billTeam||"").trim()) teamSeen.add(String(billTeam).trim());
 
     // 只有真正会进「无归属池」的行才计入：配送收入 / KPI(无绩效表) / 调整账 / 保障 / 申诉 / 各类扣款
     const intoPool = !(type==="配送费" && sub!=="配送收入") && !(type==="考核奖惩" && K);
@@ -1510,45 +1515,60 @@ function compute(period){
 
     if(type==="配送费" && sub==="配送收入"){
       billOrders++;
-      const a = mk(g);
-      const dt = bm.detail!==undefined ? String(r[bm.detail]??"").trim() : "";
-      a.rev.base += base; a.rev.stren += stren;
-      add3(a,"base",dt,base); add3(a,"stren","强度补贴",stren);
       const tk = type + "|" + sub;
       const bt = billTypes[tk] || (billTypes[tk] = { rows:0, amt:0, base:0, stren:0 });
       bt.rows++; bt.amt += amt; bt.base += base; bt.stren += stren;
-      if(rid){
-        const billTeam = bm.teamid !== undefined ? r[bm.teamid]
-                       : (bm.team !== undefined ? r[bm.team] : "");
-        if(String(billTeam||"").trim()) teamSeen.add(String(billTeam).trim());
-        for(const [x, w] of riderRowsFor(rid, g, gg.label, rname, billTeam, "")){
+      if(riderPairs){
+        for(const [x, w] of riderPairs){
+          const a = mk(x.gkey);                    // 片 = 骑手行的站点，不串
+          a.rev.base += base*w; a.rev.stren += stren*w;
+          add3(a,"base",dt,base*w); add3(a,"stren","强度补贴",stren*w);
           x.rev += (base + stren) * w;
           x.base += base * w; x.stren += stren * w;
           x.ownBase += base * w; x.ownStren += stren * w;
           x.billRows += w; x.billAmt += amt * w;
         }
+      } else {
+        const a = mk(g);
+        a.rev.base += base; a.rev.stren += stren;
+        add3(a,"base",dt,base); add3(a,"stren","强度补贴",stren);
       }
       continue;
     }
     if(type==="配送费" && sub==="配送费支付调整") continue;  // 已通过薪资还原
 
-    const dt = bm.detail!==undefined ? String(r[bm.detail]??"").trim() : "";
     const put = (key, byRiderToo, l3name) => {
-      const a = mk(g);
-      a.cost[key] += amt;
-      add3(a, key, l3name !== undefined ? l3name : sub, amt);
-      if(byRiderToo && rid){
-        const billTeam = bm.teamid !== undefined ? r[bm.teamid]
-                       : (bm.team !== undefined ? r[bm.team] : "");
-        for(const [x, w] of riderRowsFor(rid, g, gg.label, rname, billTeam, "")) x[key] += amt * w;
+      const nm = l3name !== undefined ? l3name : sub;
+      if(byRiderToo && riderPairs){
+        for(const [x, w] of riderPairs){
+          const a = mk(x.gkey);
+          a.cost[key] += amt*w; add3(a, key, nm, amt*w);
+          x[key] = (x[key]||0) + amt*w;
+        }
+      } else {
+        const a = mk(g);
+        a.cost[key] += amt; add3(a, key, nm, amt);
+      }
+      if(g==="-") other[key] += amt;
+    };
+    const addRev = (key) => {
+      if(riderPairs){
+        for(const [x, w] of riderPairs){
+          const a = mk(x.gkey);
+          a.rev[key] += amt*w; add3(a, key, dt||sub, amt*w);
+          x[key] = (x[key]||0) + amt*w;
+        }
+      } else {
+        const a = mk(g);
+        a.rev[key] += amt; add3(a, key, dt||sub, amt);
       }
       if(g==="-") other[key] += amt;
     };
 
-    if(type==="考核奖惩") { if(!K){ mk(g).rev.kpi += amt; add3(mk(g),"kpi",dt||sub,amt); if(g==="-") other.kpi += amt; } }  // 传了绩效表就以表为准，避免与账单重复计
-    else if(type==="调整账") { mk(g).rev.adj += amt; add3(mk(g),"adj",dt||sub,amt); if(g==="-") other.adj += amt; }
-    else if(type==="配送保障补贴") { mk(g).rev.guar += amt; add3(mk(g),"guar",sub,amt); if(g==="-") other.guar += amt; }
-    else if(type==="申诉返款") { mk(g).rev.appeal += amt; add3(mk(g),"appeal",sub,amt); if(g==="-") other.appeal += amt; }
+    if(type==="考核奖惩") { if(!K) addRev("kpi"); }  // 传了绩效表就以表为准，避免与账单重复计
+    else if(type==="调整账") addRev("adj");
+    else if(type==="配送保障补贴") addRev("guar");
+    else if(type==="申诉返款") addRev("appeal");
     else if(type==="日结配送费扣款") put("ins", true, dt || sub);
     else if(type==="违规扣款") put("viol", true);
     else if(type==="服务费"){
@@ -1684,7 +1704,7 @@ function compute(period){
              ins:c.ins, viol:c.viol, fee:c.fee, collect:c.collect,
              recruit:c.recruit, tax:a.tax||0, wage:-a.wage, reimb:-a.reimb, alloc:-a.alloc };
   };
-  const riderDimOf = x => ({ base:x.base||0, stren:x.stren||0, kpi:0, adj:0, guar:0, appeal:0,
+  const riderDimOf = x => ({ base:x.base||0, stren:x.stren||0, kpi:x.kpi||0, adj:x.adj||0, guar:x.guar||0, appeal:x.appeal||0,
              salary:-(x.salary||0), adv:-(x.adv||0), pay:-(x.pay||0),
              ins:x.ins||0, viol:x.viol||0, fee:0, collect:0,
              recruit:0, tax:0, wage:0, reimb:0, alloc:0 });
