@@ -2222,7 +2222,8 @@ function renderRiders(m){
         html += `<td class="r num g1 ${v<0?"neg":""}"${tip}>${txt}</td>`;
       }
     }
-    html += `<td class="r num g1 ${x.net<0?"neg":"pos"}">${x.net<0?"−":""}${money(Math.abs(x.net))}</td>`;
+    const netV = state.perUnit ? (x.orders ? x.net/x.orders : 0) : x.net;
+    html += `<td class="r num g1 ${netV<0?"neg":"pos"}">${netV<0?"−":""}${state.perUnit ? "¥"+Math.abs(netV).toFixed(2) : money(Math.abs(netV))}</td>`;
     html += `<td class="r num ${x.rate<0?"neg":""}">${pct(x.rate||0)}</td>`;
     return html;
   };
