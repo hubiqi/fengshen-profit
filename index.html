@@ -629,7 +629,7 @@ const SLOTS = [
   { id:"kpi", name:"绩效达成明细", req:false, minScore:2,
     desc:"考核奖励（可选）。<b>需要列</b>：对象ID、总奖励金额；不传则从风神账单的「考核奖惩」行取。这里的「商圈片名称」也是映射下拉的片名来源",
     need:["obj","amt"],
-    keys:[["obj",["对象id"]],["amt",["总奖励金额"]],["date",["数据日期","账单周期"]],
+    keys:[["obj",["对象id","对象ID"]],["amt",["总奖励金额","奖励金额合计","激励金额","总奖励"]],["date",["数据日期","账单周期"]],
           ["name",["对象名称"]],["gname",["商圈片名称","商圈片","片区名称","商圈名称"]]],
     sheet:["kpi","绩效达成明细"] }
 ];
@@ -980,7 +980,7 @@ async function parseFile(file, slot){
 }
 
 /* 表头自适应：扫前 40 行，按列名打分，取最高分那一行，再按列号压缩取数 */
-function pickColumn(norm, cands, used){
+function pickColumn(norm, cands, used, parents){
   for(const c of cands){
     const n = N(c);
     const i = norm.indexOf(n);
@@ -993,6 +993,30 @@ function pickColumn(norm, cands, used){
       if(used[i] || !norm[i]) continue;
       if(norm[i].includes(n)) return i;
       if(n.length >= 4 && n.includes(norm[i])) return i;
+    }
+  }
+  // 一级表头匹配：二级列名是「结果/金额/合计」之类，靠上一级表头认
+  if(parents){
+    for(const c of cands){
+      const n = N(c);
+      if(n.length < 2) continue;
+      const hits = [];
+      for(let i=0;i<parents.length;i++){
+        if(used[i] || !parents[i]) continue;
+        if(parents[i] === n) hits.push(i);
+      }
+      if(!hits.length) continue;
+      // 同一一级表头下有多列时优先「结果/金额/合计」
+      const pref = hits.find(i => /^(结果|金额|合计|总计|数值|奖励金额)$/.test(norm[i]));
+      return pref !== undefined ? pref : hits[0];
+    }
+    for(const c of cands){
+      const n = N(c);
+      if(n.length < 2) continue;
+      for(let i=0;i<parents.length;i++){
+        if(used[i] || !parents[i]) continue;
+        if(parents[i].includes(n)) return i;
+      }
     }
   }
   return -1;
@@ -1014,13 +1038,30 @@ function detectHeader(rows, slot){
   }
   if(best.row < 0 || best.score < 2) return null;
 
-  // 两行表头：上一行补齐缺列
+  // 两行表头：上一行当一级表头（合并单元格会向右填充），先补缺列，再供二级列配不上时兜底
+  let parents = null;
   if(best.row > 0){
-    const above = (rows[best.row-1]||[]).map(N);
+    const raw = (rows[best.row-1]||[]);
+    const filled = [];
+    let last = "";
+    for(let i=0;i<Math.max(raw.length, (rows[best.row]||[]).length);i++){
+      const v = N(raw[i] === undefined ? "" : raw[i]);
+      if(v) last = v;
+      filled[i] = v || last;
+    }
+    parents = filled;
     const used = {}; for(const k in best.map) used[best.map[k]] = 1;
+    const aboveNorm = raw.map(N);
     for(const [key,cands] of slot.keys){
       if(best.map[key] !== undefined) continue;
-      const c = pickColumn(above, cands, used);
+      let c = pickColumn(aboveNorm, cands, used);
+      if(c < 0) c = pickColumn((rows[best.row]||[]).map(N), cands, used, parents);
+      if(c >= 0){ best.map[key] = c; used[c] = 1; }
+    }
+    // 仍然没配上的键，用一级表头兜底（如「总奖励金额」下面只有一个「结果」）
+    for(const [key,cands] of slot.keys){
+      if(best.map[key] !== undefined) continue;
+      const c = pickColumn((rows[best.row]||[]).map(N), cands, used, parents);
       if(c >= 0){ best.map[key] = c; used[c] = 1; }
     }
   }
@@ -1036,7 +1077,8 @@ function detectHeader(rows, slot){
   });
   const missing = (slot.need||[]).filter(k => best.map[k] === undefined);
   const colName = k => (map[k] === undefined ? "" : headerNames[map[k]]);
-  return { map, cols, keys:keyList, headerNames, headerRow: best.row + 1, score: best.score, missing, colName,
+  const parentNames = cols.map((c,i) => parents && c >= 0 ? (parents[c] || "") : "");
+  return { map, cols, keys:keyList, headerNames, parentNames, headerRow: best.row + 1, score: best.score, missing, colName,
            detected: Object.keys(best.map) };
 }
 
@@ -1610,6 +1652,7 @@ function compute(period){
 
   // ---- KPI 覆盖（若上传绩效表）----
   let kpiFromSheet = 0;
+  const kpiMiss = [];
   if(K){
     const km=K.map;
     for(const r of K.rows){
@@ -1621,7 +1664,7 @@ function compute(period){
         .map(i => rememberName(r[i]) || gKey(r[i])).filter(Boolean);
       const hit = cands.find(k => G[k]);
       if(hit){ G[hit].rev.kpi = v; add3(G[hit],"kpi","绩效表",v); kpiFromSheet += v; }
-      else if(v){ other.kpi += v; kpiFromSheet += v; }   // 表里有、但账单没这个片：进无归属池，别丢
+      else if(v){ other.kpi += v; kpiFromSheet += v; kpiMiss.push([String(km.gname !== undefined ? r[km.gname] : "").trim() || String(r[km.name]||"").trim(), v]); }   // 表里有、但账单没这个片：进无归属池，别丢
     }
   }
 
@@ -1770,7 +1813,7 @@ function compute(period){
   return { period, billTypes, billCols, teamUnmapped, groups: groups.sort((a,b)=>b.orders-a.orders), sum, riders: riderList,
            company, unassigned:{rows:unassignedRows,amt:unassignedAmt,list:unassignedList}, billOrders,
            unmapped, stationSrc: SM.src, suspect, skipRider,
-           totalOrders, kpiFromSheet, taxRates:{sal:TAX_SAL,vat:TAX_VAT} };
+           totalOrders, kpiFromSheet, kpiMiss, taxRates:{sal:TAX_SAL,vat:TAX_VAT} };
 }
 
 /* ================= 渲染 ================= */
@@ -2292,6 +2335,9 @@ function renderNotes(m){
   if(amtDiff.length){
     const gap = amtDiff.reduce((t,x)=>t + ((x.billAmt||0) - (x.ownBase + x.ownStren)), 0);
     warn.push(`<li class="warn"><b>${amtDiff.length}</b> 名骑手的「金额」与「基础配送费 + 强度补贴」合计对不上，差额 <b>${money(Math.abs(gap))}</b>（${amtDiff.slice(0,3).map(x=>esc(x.name||x.id)).join("、")}${amtDiff.length>3?"…":""}）——工具的收入取的是<b>基础配送费 + 强度补贴</b>，不是「金额」列；若账单里部分行这两列是空的，就会比金额少。</li>`);
+  }
+  if(m.kpiMiss && m.kpiMiss.length){
+    warn.push(`<li class="warn">绩效表里有 <b>${m.kpiMiss.length}</b> 条奖励没匹配到商圈片（${m.kpiMiss.slice(0,4).map(x=>esc(x[0])).join("、")}${m.kpiMiss.length>4?"…":""}，合计 ${money(Math.abs(m.kpiMiss.reduce((t,x)=>t+x[1],0)))}），已按完单占比分摊——绩效表的「商圈片名称」要和账单里的站点/片名对得上。</li>`);
   }
   const revNoOrders = (m.riders||[]).filter(x => x.orders === 0 && Math.abs(x.rev||0) > 0.5);
   if(revNoOrders.length){
