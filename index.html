@@ -2030,14 +2030,22 @@ function groupDetail(a){
   const d = a.inc || {}, c = a.cost;
   const R = (n,v)=>({ n, v: v||0 });
   const E = (n,v)=>({ n, v: v||0 });   // 传入的已是「对利润的贡献」符号，不再强制负号
+  const G = (l1, cols, withSum) => {
+    const grp = { l1, cols };
+    if(withSum){
+      const sum = cols.reduce((t,c)=>t + (c.pct ? 0 : (c.v||0)), 0);
+      cols.push({ n:"小计", v:sum, sum:true });
+    }
+    return grp;
+  };
   return [
-    { l1:"收入", cols:[R("基础配送费",d.base),R("强度补贴",d.stren),R("KPI 考核",d.kpi),R("调整账",d.adj),R("配送保障补贴",d.guar),R("申诉返款",d.appeal)] },
-    { l1:"骑手成本", cols:[E("骑手薪资（平台代发）",-c.salary),E("骑手预支（我方垫付）",-c.adv),E("骑手代付（个税）",-c.pay)] },
-    { l1:"平台费", cols:[E("保险",c.ins),E("违规扣款",c.viol),E("服务费",c.fee),E("代收代付",c.collect)] },
-    { l1:"招聘", cols:[E("招聘服务费",c.recruit)] },
-    { l1:"税赋", cols:[E("税赋",a.tax)] },
-    { l1:"管理成本", cols:[E("站点管理工资",-a.wage),E("站点支出",-a.reimb),E("城市分摊",-a.alloc)] },
-    { l1:"净利", cols:[{ n:"净利", v:a.profit },{ n:"净利率", pct:true }] }
+    G("收入", [R("基础配送费",d.base),R("强度补贴",d.stren),R("KPI 考核",d.kpi),R("调整账",d.adj),R("配送保障补贴",d.guar),R("申诉返款",d.appeal)], true),
+    G("骑手成本", [E("骑手薪资（平台代发）",-c.salary),E("骑手预支（我方垫付）",-c.adv),E("骑手代付（个税）",-c.pay)], true),
+    G("平台费", [E("保险",c.ins),E("违规扣款",c.viol),E("服务费",c.fee),E("代收代付",c.collect)], true),
+    G("招聘", [E("招聘服务费",c.recruit)], false),
+    G("税赋", [E("税赋",a.tax)], false),
+    G("管理成本", [E("站点管理工资",-a.wage),E("站点支出",-a.reimb),E("城市分摊",-a.alloc)], true),
+    { l1:"结果", cols:[{ n:"总收入", v:a.rev },{ n:"总支出", v:(a.profit - a.rev) },{ n:"净利", v:a.profit },{ n:"净利率", pct:true }] }
   ];
 }
 function groupDetailSum(groups){
@@ -2088,12 +2096,13 @@ function renderGroupMatrix(m){
     `</tr>`;
 
   const cellsOf = (d, ord) => d.map(g=>{
-    const signed = g.l1!=="收入" && g.l1!=="净利";
+    const signed = g.l1!=="收入" && g.l1!=="结果";
     return g.cols.map(c=>{
       if(c.pct) return `<td class="r num pctc g1" data-pct="1">—</td>`;
       const v = state.perUnit ? (ord ? c.v/ord : 0) : c.v;
       const txt = state.perUnit ? `¥${Math.abs(v).toFixed(2)}` : money(Math.abs(v));
-      return `<td class="r num g1 ${v<0?"neg":""}">${v<0?"−":(signed&&v>0?"+":"")}${txt}</td>`;
+      const st = c.sum ? ' style="background:#f7f9fc;font-weight:650"' : "";
+      return `<td class="r num g1 ${v<0?"neg":""}"${st}>${v<0?"−":(signed&&v>0?"+":"")}${txt}</td>`;
     }).join("");
   }).join("");
 
@@ -2124,12 +2133,12 @@ function renderGroupTree(m){
       ${num(a.profit, a.profit<0?"neg":"pos")}<td class="r num ${a.perProfit<0?"neg":"pos"}">${num2(a.perProfit)}</td>
       <td class="r num">${pct(rev? a.profit/rev*100:0)}</td></tr>`);
     for(const g of groupDetail(a)){
-      if(g.l1==="净利") continue;
-      const gsum = g.cols.filter(c=>!c.pct).reduce((x,c)=>x+c.v,0);
+      if(g.l1==="结果") continue;
+      const gsum = g.cols.filter(c=>!c.pct && !c.sum).reduce((x,c)=>x+c.v,0);
       body.push(`<tr class="t1"><td></td><td>${g.l1}</td><td>小计</td><td></td>
         ${num(gsum)}<td class="r num">${num2(gsum/o)}</td><td class="r num">${share(gsum)}</td></tr>`);
       for(const c of g.cols){
-        if(c.pct) continue;
+        if(c.pct || c.sum) continue;
         body.push(`<tr class="t2"><td></td><td></td><td>${esc(c.n)}</td><td></td>
           ${num(c.v)}<td class="r num">${num2(c.v/o)}</td><td class="r num">${share(c.v)}</td></tr>`);
         const cat = (GROUP_CAT[g.l1]||{})[c.n];
@@ -2159,15 +2168,18 @@ function exportGroupsCsv(){
   const dump=(g,a)=>{
     const o=a.orders||1, rev=a.rev||0;
     for(const grp of groupDetail(a)){
-      if(grp.l1==="净利"){
+      if(grp.l1==="结果"){
         const pctv = rev ? a.profit/rev*100 : 0;
-        const r1 = L3 ? [g,"净利","净利",""] : [g,"净利","净利"];
-        rows.push([...r1, a.profit.toFixed(2), (a.perProfit||0).toFixed(2), pctv.toFixed(1)]);
-        const r2 = L3 ? [g,"净利","净利率",""] : [g,"净利","净利率"];
+        const o = a.orders||1;
+        const mk3 = (n,v) => { const r = L3 ? [g,"结果",n,""] : [g,"结果",n];
+          rows.push([...r, v.toFixed(2), (v/o).toFixed(2), (rev? Math.abs(v)/rev*100:0).toFixed(1)]); };
+        mk3("总收入", a.rev); mk3("总支出", a.profit - a.rev); mk3("净利", a.profit);
+        const r2 = L3 ? [g,"结果","净利率",""] : [g,"结果","净利率"];
         rows.push([...r2, pctv.toFixed(1)+"%", "", ""]);
         continue;
       }
       for(const c of grp.cols){
+        if(c.sum) continue;
         if(c.pct) continue;
         const cat=(GROUP_CAT[grp.l1]||{})[c.n];
         const items3 = L3 ? l3Items(a.l3, cat) : [];
