@@ -1745,7 +1745,7 @@ function compute(period){
     const pay = x.pay||0, net = x.net||0, revAll = x.revAll||0;
     const gross = x.gross||0;
     const salaryOwn = -(x.salary||0);          // 本人账单薪资（已含负薪资按 0 计）
-    return { ...x, dim, pay, gross, net, revAll,
+    return { ...x, dim, pay, gross, net, revAll, costAll: (net - revAll),
              salaryOwn, salaryAlloc: (dim.salary||0) - salaryOwn,
              crossGroups: x.gsal ? Object.keys(x.gsal).length : 1,
              per: x.orders? gross/x.orders:0, perNet: x.orders? net/x.orders:0,
@@ -2148,14 +2148,14 @@ function exportGroupsCsv(){
 }
 
 const DIM_CATS = [
-  { l1:"收入", cols:[["基础配送费","base"],["强度补贴","stren"],["KPI 考核","kpi"],["调整账","adj"],["配送保障补贴","guar"],["申诉返款","appeal"]] },
-  { l1:"骑手成本", cols:[["骑手薪资（平台代发）","salary"],["骑手预支（我方垫付）","adv"],["骑手代付（个税）","pay"]] },
-  { l1:"平台费", cols:[["保险","ins"],["违规扣款","viol"],["服务费","fee"],["代收代付","collect"]] },
+  { l1:"收入", sum:true, cols:[["基础配送费","base"],["强度补贴","stren"],["KPI 考核","kpi"],["调整账","adj"],["配送保障补贴","guar"],["申诉返款","appeal"]] },
+  { l1:"骑手成本", sum:true, cols:[["骑手薪资（平台代发）","salary"],["骑手预支（我方垫付）","adv"],["骑手代付（个税）","pay"]] },
+  { l1:"平台费", sum:true, cols:[["保险","ins"],["违规扣款","viol"],["服务费","fee"],["代收代付","collect"]] },
   { l1:"招聘", cols:[["招聘服务费","recruit"]] },
   { l1:"税赋", cols:[["税赋","tax"]] },
-  { l1:"管理成本", cols:[["站点管理工资","wage"],["站点支出","reimb"],["城市分摊","alloc"]] }
+  { l1:"管理成本", sum:true, cols:[["站点管理工资","wage"],["站点支出","reimb"],["城市分摊","alloc"]] }
 ];
-const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length, 0) + 2;   // + 净利 + 净利率
+const DIM_N = DIM_CATS.reduce((n,g)=>n + g.cols.length + (g.sum?1:0), 0) + 4;   // 小计 + 总收入/总支出/净利/净利率
 let _riderHeadBuilt = false;
 function buildRiderHead(){
   if(_riderHeadBuilt) return;
@@ -2164,10 +2164,12 @@ function buildRiderHead(){
   el.innerHTML =
     `<tr><th rowspan="2" class="s" data-k="name">骑手</th><th rowspan="2">团队</th><th rowspan="2">商圈片</th>` +
     `<th rowspan="2" class="r s" data-k="orders" style="border-right:2px solid var(--line)">单量</th>` +
-    DIM_CATS.map(g=>`<th colspan="${g.cols.length}" class="g1" style="text-align:center">${g.l1}</th>`).join("") +
-    `<th colspan="2" class="g1" style="text-align:center">结果</th></tr><tr>` +
-    DIM_CATS.map(g=>g.cols.map(([n,k])=>`<th class="r s g1" data-k="${k}">${n}</th>`).join("")).join("") +
-    `<th class="r s g1" data-k="net">净利</th><th class="r s" data-k="rate">净利率</th></tr>`;
+    DIM_CATS.map(g=>`<th colspan="${g.cols.length + (g.sum?1:0)}" class="g1" style="text-align:center">${g.l1}</th>`).join("") +
+    `<th colspan="4" class="g1" style="text-align:center">结果</th></tr><tr>` +
+    DIM_CATS.map(g=>g.cols.map(([n,k])=>`<th class="r s g1" data-k="${k}">${n}</th>`).join("") +
+      (g.sum ? `<th class="r s" style="background:#f7f9fc;font-weight:650">小计</th>` : "")).join("") +
+    `<th class="r s g1" data-k="revAll">总收入</th><th class="r s" data-k="costAll">总支出</th>` +
+    `<th class="r s" data-k="net">净利</th><th class="r s" data-k="rate">净利率</th></tr>`;
 }
 function renderRiders(m){
   buildRiderHead();
@@ -2221,9 +2223,24 @@ function renderRiders(m){
         }
         html += `<td class="r num g1 ${v<0?"neg":""}"${tip}>${txt}</td>`;
       }
+      if(g.sum){
+        const sumRaw = g.cols.reduce((t,[,k2])=>t + (d[k2]||0), 0);
+        const sv = state.perUnit ? (x.orders ? sumRaw/x.orders : 0) : sumRaw;
+        const per = state.perUnit;
+        html += `<td class="r num ${sv<0?"neg":""}" style="background:#f7f9fc;font-weight:650">${sv<0?"−":""}${per ? "¥"+Math.abs(sv).toFixed(2) : money(Math.abs(sv))}</td>`;
+      }
     }
     const netV = state.perUnit ? (x.orders ? x.net/x.orders : 0) : x.net;
-    html += `<td class="r num g1 ${netV<0?"neg":"pos"}">${netV<0?"−":""}${state.perUnit ? "¥"+Math.abs(netV).toFixed(2) : money(Math.abs(netV))}</td>`;
+    const fmtCell = (v, cls) => {
+      const per = state.perUnit;
+      return `<td class="r num ${cls} ${v<0?"neg":""}">${v<0?"−":""}${per ? "¥"+Math.abs(v).toFixed(2) : money(Math.abs(v))}</td>`;
+    };
+    // 结果：总收入 / 总支出 / 净利 / 净利率
+    const revV = state.perUnit ? (x.orders ? (x.revAll||0)/x.orders : 0) : (x.revAll||0);
+    const costV = state.perUnit ? (x.orders ? (x.costAll||0)/x.orders : 0) : (x.costAll||0);
+    html += `<td class="r num g1 ${revV<0?"neg":"pos"}">${revV<0?"−":""}${state.perUnit ? "¥"+Math.abs(revV).toFixed(2) : money(Math.abs(revV))}</td>`;
+    html += `<td class="r num ${costV<0?"neg":"pos"}">${costV<0?"−":""}${state.perUnit ? "¥"+Math.abs(costV).toFixed(2) : money(Math.abs(costV))}</td>`;
+    html += `<td class="r num ${netV<0?"neg":"pos"}">${netV<0?"−":""}${state.perUnit ? "¥"+Math.abs(netV).toFixed(2) : money(Math.abs(netV))}</td>`;
     html += `<td class="r num ${x.rate<0?"neg":""}">${pct(x.rate||0)}</td>`;
     return html;
   };
@@ -2579,12 +2596,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if(state.tab==="rider"){
       head=["骑手","ID","团队","商圈片","单量"];
       DIM_CATS.forEach(g=>g.cols.forEach(([n])=>head.push(g.l1+"·"+n)));
-      head=head.concat(["净利","净利率%","备注"]);
+      head=head.concat(["总收入","总支出","净利","净利率%","备注"]);
       rows=state.model.riders.map(x=>{
         const dd=x.dim||{};
         const vals=[];
         DIM_CATS.forEach(g=>g.cols.forEach(([,k])=>vals.push((dd[k]||0).toFixed(2))));
-        return [x.name,x.id,x.team||"",x.group,x.orders,...vals,x.net.toFixed(2),(x.rate||0).toFixed(1),
+        return [x.name,x.id,x.team||"",x.group,x.orders,...vals,(x.revAll||0).toFixed(2),(x.costAll||0).toFixed(2),x.net.toFixed(2),(x.rate||0).toFixed(1),
                 x.salaryRaw<0 ? `薪资原值 ${x.salaryRaw.toFixed(2)} 已按 0 计` : ""];
       });
     } else if(state.tab==="group"){
